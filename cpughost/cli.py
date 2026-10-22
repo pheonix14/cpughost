@@ -475,56 +475,6 @@ def pointer_cmd(color: Optional[str] = None, size: Optional[float] = None, list_
     save_config(cfg)
 
 
-@main.command(name="phone")
-@click.argument("ip", required=False)
-@click.option("--web", "-w", is_flag=True, help="Open Web Screen Stream instead of scrcpy")
-@click.option("--pair", "-p", is_flag=True, help="Pair Android 11+ Wireless Debugging code")
-@click.option("--bitrate", "-b", default="12M", help="Video bitrate (e.g. 8M, 12M, 20M)")
-@click.option("--fps", "-f", default=60, type=int, help="Max framerate (default: 60)")
-@click.option("--off", is_flag=True, help="Turn physical phone screen off while mirroring on PC")
-@click.option("--no-audio", is_flag=True, help="Disable audio forwarding")
-@click.option("--serve", is_flag=True, help="Run phone screen and beacon server (for PC zero)")
-@click.option("--setup", "-s", is_flag=True, help="Interactive Phone Mirror Setup Wizard")
-def phone_cmd(
-    ip: Optional[str] = None,
-    web: bool = False,
-    pair: bool = False,
-    bitrate: str = "12M",
-    fps: int = 60,
-    off: bool = False,
-    no_audio: bool = False,
-    serve: bool = False,
-    setup: bool = False
-):
-    """Mirror Android phone screen to PC zero with audio & touch/keyboard pass-through."""
-    from .phone_mirror import launch_phone_mirror, interactive_phone_menu, pair_adb_wireless, detect_phone_ip
-
-    if serve:
-        from .phone_server import run_phone_host_service
-        run_phone_host_service()
-        return
-
-    if setup:
-        interactive_phone_menu()
-        return
-
-    if pair:
-        phone_ip = ip or detect_phone_ip() or click.prompt("Enter phone IP")
-        port = click.prompt("Enter pairing port from phone Wireless Debugging screen", type=int)
-        code = click.prompt("Enter 6-digit pairing code", type=str)
-        pair_adb_wireless(phone_ip, port, code)
-        return
-
-    launch_phone_mirror(
-        target_ip=ip,
-        bitrate=bitrate,
-        max_fps=fps,
-        turn_screen_off=off,
-        audio=(not no_audio),
-        web_mode=web
-    )
-
-
 @main.group()
 def drive():
     """Virtual Pen Drive file management."""
@@ -680,9 +630,15 @@ def stop():
 @click.option("--wireless", "-w", is_flag=True, help="Force wireless ADB connection over hotspot port 5555")
 @click.option("--port", "-p", default=5555, help="Wireless ADB port (default 5555)")
 @click.option("--turn-screen-off", "-S", is_flag=True, help="Turn off physical phone screen during mirroring")
-def phone_cmd(device_or_ip: Optional[str] = None, name: str = "Caesar", wireless: bool = False, port: int = 5555, turn_screen_off: bool = False):
+@click.option("--serve", "-s", is_flag=True, help="Run phone screen and beacon server (for PC zero)")
+def phone_cmd(device_or_ip: Optional[str] = None, name: str = "Caesar", wireless: bool = False, port: int = 5555, turn_screen_off: bool = False, serve: bool = False):
     """Mirror and control Android phone (Caesar) over USB or Wireless Hotspot."""
     print_ascii_banner()
+    from .config import is_android
+    if serve or (is_android() and not device_or_ip and not wireless):
+        from .phone_server import run_phone_host_service
+        run_phone_host_service()
+        return
     from .phone import (
         is_adb_installed, is_scrcpy_installed,
         connect_wireless, auto_scan_and_connect_phone, launch_phone_mirror
