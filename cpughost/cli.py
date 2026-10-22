@@ -49,6 +49,91 @@ def print_ascii_banner():
     console.print(f"[bold cyan]{banner}[/bold cyan]")
 
 
+def notify_desktop(title: str, message: str):
+    """Send desktop notification if notify-send is available."""
+    try:
+        subprocess.run(
+            ["notify-send", "-a", "CPUGhost", title, message],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+    except Exception:
+        pass
+
+
+def check_and_apply_auto_update(silent: bool = True):
+    """Check GitHub for updates on boot with a strict 3-second timeout."""
+    project_dir = Path(__file__).resolve().parent.parent
+    if not (project_dir / ".git").exists():
+        return
+    try:
+        if not silent:
+            console.print("[UPDATE] Checking GitHub for updates...")
+        res = subprocess.run(
+            ["timeout", "3", "git", "ls-remote", "--heads", "origin", "main"],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True
+        )
+        if res.returncode == 0 and res.stdout:
+            remote_hash = res.stdout.strip().split()[0]
+            local_res = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(project_dir),
+                capture_output=True,
+                text=True
+            )
+            local_hash = local_res.stdout.strip() if local_res.returncode == 0 else ""
+
+            if remote_hash and local_hash and remote_hash != local_hash:
+                console.print(f"[UPDATE] New update detected on GitHub ({remote_hash[:7]}). Applying...")
+                subprocess.run(["git", "pull", "--quiet", "origin", "main"], cwd=str(project_dir), capture_output=True)
+                console.print("[OK] CPUGhost auto-updated to latest commit.")
+    except Exception:
+        pass
+
+
+def wait_for_host_detection(poll_interval: float = 1.5) -> Optional[str]:
+    """Continuously poll hotspot until a CPUGhost host is detected, then return its IP."""
+    cfg = load_config()
+    disc = GhostDiscovery(port=cfg.get("discovery_port", 8989))
+    disc.start_listener()
+    console.print("[DISCOVERY] Waiting for Zorin PC on hotspot Wi-Fi...")
+
+    counter = 0
+    try:
+        while True:
+            peers = [p for p in disc.get_active_peers() if "host" in p.get("roles", [])]
+            if peers:
+                chosen = peers[0]
+                disc.stop()
+                console.print("==================================================================")
+                console.print(f"[OK] DETECTED ZORIN PC: {chosen.get('node_name', 'Host')} ({chosen['ip']})")
+                console.print("==================================================================")
+                cfg["last_peer_ip"] = chosen["ip"]
+                save_config(cfg)
+                return chosen["ip"]
+
+            counter += 1
+            if counter % 5 == 0:
+                active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888), timeout=0.2)
+                if active_ips:
+                    disc.stop()
+                    ip = active_ips[0]
+                    console.print("==================================================================")
+                    console.print(f"[OK] DETECTED ZORIN PC VIA SUBNET SCAN: {ip}")
+                    console.print("==================================================================")
+                    cfg["last_peer_ip"] = ip
+                    save_config(cfg)
+                    return ip
+
+            time.sleep(poll_interval)
+    except KeyboardInterrupt:
+        disc.stop()
+        return None
+
+
 def resolve_host_ip(ip_arg: Optional[str], interactive: bool = True) -> Optional[str]:
     """Resolve host IP via argument, discovery beacon, or subnet scan."""
     if ip_arg:
@@ -192,6 +277,7 @@ def first_run_wizard():
 @click.option("--daemon", "-d", is_flag=True, help="Run host daemon in background")
 def host(daemon: bool):
     """Start host server (Screen sharing + Virtual Pen Drive)."""
+    check_and_apply_auto_update(silent=True)
     pid = get_stored_pid()
     if pid:
         console.print(f"[WARN] Host already running with PID {pid}. Run 'ghost stop' first.")
@@ -226,12 +312,21 @@ def host(daemon: bool):
 
 @main.command()
 @click.argument("ip", required=False)
-def client(ip: Optional[str] = None):
+@click.option("--wait", "-w", is_flag=True, help="Continuously wait and auto-connect when host appears")
+def client(ip: Optional[str] = None, wait: bool = False):
     """Connect to ghost host: mount pen drive and launch screen window."""
-    host_ip = resolve_host_ip(ip)
+    check_and_apply_auto_update(silent=True)
+
+    if wait and not ip:
+        notify_desktop("CPUGhost Client Active", "Waiting for Zorin PC on hotspot...")
+        host_ip = wait_for_host_detection()
+    else:
+        host_ip = resolve_host_ip(ip)
+
     if not host_ip:
         return
 
+    notify_desktop("CPUGhost Connected", f"Opening monitor window for {host_ip}...")
     cfg = load_config()
     mount_dir = Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
     mount_dir.mkdir(parents=True, exist_ok=True)
@@ -416,17 +511,43 @@ def autostart():
 
 
 @autostart.command(name="enable")
-def autostart_enable():
-    """Enable CPUGhost Host autostart on boot/login."""
+@click.option("--host", "role_host", is_flag=True, help="Configure as Headless Host (Zorin OS PC)")
+@click.option("--client", "role_client", is_flag=True, help="Configure as Primary Client (Viewer PC)")
+def autostart_enable(role_host: bool, role_client: bool):
+    """Enable CPUGhost autostart on boot/login for Host or Client."""
+    cfg = load_config()
     ghost_bin = shutil.which("ghost") or str(Path.home() / ".local" / "bin" / "ghost")
     if not Path(ghost_bin).exists():
         ghost_bin = str(Path(__file__).resolve().parent.parent / "bin" / "ghost")
+
+    # Determine role
+    if role_client:
+        role = "client"
+    elif role_host:
+        role = "host"
+    else:
+        role = cfg.get("configured_role", "client")
+
+    cfg["configured_role"] = role
+    save_config(cfg)
 
     # 1. XDG Autostart (.desktop)
     autostart_dir = Path.home() / ".config" / "autostart"
     autostart_dir.mkdir(parents=True, exist_ok=True)
     desktop_file = autostart_dir / "cpughost.desktop"
-    desktop_content = f"""[Desktop Entry]
+
+    if role == "client":
+        desktop_content = f"""[Desktop Entry]
+Type=Application
+Name=CPUGhost Client Monitor
+Comment=Auto-connect to Zorin OS CPUGhost Host and open monitor window
+Exec={ghost_bin} client --wait
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+"""
+    else:
+        desktop_content = f"""[Desktop Entry]
 Type=Application
 Name=CPUGhost Host
 Comment=Headless Dual-PC Hotspot Screen and Virtual Pen Drive System
@@ -435,23 +556,29 @@ Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
 """
+
     desktop_file.write_text(desktop_content)
-    console.print(f"[OK] Created XDG autostart entry: {desktop_file}")
+    console.print(f"[OK] Created XDG autostart entry ({role.upper()}): {desktop_file}")
 
     # 2. Systemd user service
     systemd_dir = Path.home() / ".config" / "systemd" / "user"
     systemd_dir.mkdir(parents=True, exist_ok=True)
     service_file = systemd_dir / "cpughost.service"
+
+    exec_cmd = f"{ghost_bin} client --wait" if role == "client" else f"{ghost_bin} host"
+    service_desc = "CPUGhost Client Auto-Connect Service" if role == "client" else "CPUGhost Headless Dual-PC Host Service"
+
     service_content = f"""[Unit]
-Description=CPUGhost Headless Dual-PC Host Service
+Description={service_desc}
 After=network.target network-online.target
 
 [Service]
 Type=simple
-ExecStart={ghost_bin} host
+ExecStart={exec_cmd}
 Restart=on-failure
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
 
 [Install]
 WantedBy=default.target
@@ -475,7 +602,7 @@ WantedBy=default.target
     except Exception:
         pass
 
-    console.print("[OK] CPUGhost will now start automatically whenever this PC turns on.")
+    console.print(f"[OK] CPUGhost ({role.upper()} MODE) will now start automatically whenever this PC turns on.")
 
 
 @autostart.command(name="disable")
