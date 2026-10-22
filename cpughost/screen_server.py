@@ -26,6 +26,13 @@ KEY_MAPPING = {
     "shift": Key.shift,
     "ctrl": Key.ctrl,
     "alt": Key.alt,
+    "super": Key.cmd,
+    "menu": Key.menu,
+    "print_screen": Key.print_screen,
+    "insert": Key.insert,
+    "pause": Key.pause,
+    "num_lock": Key.num_lock,
+    "scroll_lock": Key.scroll_lock,
     "esc": Key.esc,
     "escape": Key.esc,
     "up": Key.up,
@@ -40,11 +47,13 @@ KEY_MAPPING = {
     "caps_lock": Key.caps_lock,
     "f1": Key.f1, "f2": Key.f2, "f3": Key.f3, "f4": Key.f4,
     "f5": Key.f5, "f6": Key.f6, "f7": Key.f7, "f8": Key.f8,
-    "f9": Key.f9, "f10": Key.f10, "f11": Key.f11, "f12": Key.f12
+    "f9": Key.f9, "f10": Key.f10, "f11": Key.f11, "f12": Key.f12,
+    "kp_0": "0", "kp_1": "1", "kp_2": "2", "kp_3": "3", "kp_4": "4",
+    "kp_5": "5", "kp_6": "6", "kp_7": "7", "kp_8": "8", "kp_9": "9"
 }
 
 
-def ensure_display_environment():
+def ensure_display_environment(resolution: str = "1920x1080"):
     """Ensure a valid X11 or Wayland display environment variable exists."""
     if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
         # Check standard active X11 sockets
@@ -59,15 +68,16 @@ def ensure_display_environment():
         xvfb_bin = shutil.which("Xvfb")
         if xvfb_bin:
             try:
+                res_spec = f"{resolution}x24"
                 subprocess.Popen(
-                    [xvfb_bin, ":99", "-screen", "0", "1920x1080x24", "-nocursor"],
+                    [xvfb_bin, ":99", "-screen", "0", res_spec, "-nocursor"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                     preexec_fn=os.setpgrp
                 )
                 time.sleep(0.5)
                 os.environ["DISPLAY"] = ":99"
-                console.print("[SCREEN] Spawned virtual framebuffer on display :99 (Xvfb)")
+                console.print(f"[SCREEN] Spawned virtual monitor on display :99 ({resolution} Xvfb)")
                 return
             except Exception:
                 pass

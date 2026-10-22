@@ -18,7 +18,8 @@ DEFAULT_CONFIG = {
     "mount_point": str(Path.home() / "Desktop" / "GhostDrive"),
     "last_peer_ip": "",
     "auto_mount": True,
-    "headless_display": ":0"
+    "headless_display": ":0",
+    "screen_resolution": "1920x1080"
 }
 
 

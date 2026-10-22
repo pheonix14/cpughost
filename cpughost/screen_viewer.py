@@ -7,7 +7,7 @@ import time
 import queue
 import threading
 import asyncio
-from typing import Optional
+from typing import Optional, Tuple
 import pygame
 import websockets
 from rich.console import Console
@@ -26,6 +26,14 @@ PYGAME_KEY_MAP = {
     pygame.K_RCTRL: "ctrl",
     pygame.K_LALT: "alt",
     pygame.K_RALT: "alt",
+    pygame.K_LSUPER: "super",
+    pygame.K_RSUPER: "super",
+    pygame.K_MENU: "menu",
+    pygame.K_PRINT: "print_screen",
+    pygame.K_INSERT: "insert",
+    pygame.K_PAUSE: "pause",
+    pygame.K_NUMLOCK: "num_lock",
+    pygame.K_SCROLLOCK: "scroll_lock",
     pygame.K_ESCAPE: "esc",
     pygame.K_UP: "up",
     pygame.K_DOWN: "down",
@@ -39,8 +47,35 @@ PYGAME_KEY_MAP = {
     pygame.K_CAPSLOCK: "caps_lock",
     pygame.K_F1: "f1", pygame.K_F2: "f2", pygame.K_F3: "f3", pygame.K_F4: "f4",
     pygame.K_F5: "f5", pygame.K_F6: "f6", pygame.K_F7: "f7", pygame.K_F8: "f8",
-    pygame.K_F9: "f9", pygame.K_F10: "f10", pygame.K_F11: "f11", pygame.K_F12: "f12"
+    pygame.K_F9: "f9", pygame.K_F10: "f10", pygame.K_F11: "f11", pygame.K_F12: "f12",
+    pygame.K_KP0: "kp_0", pygame.K_KP1: "kp_1", pygame.K_KP2: "kp_2",
+    pygame.K_KP3: "kp_3", pygame.K_KP4: "kp_4", pygame.K_KP5: "kp_5",
+    pygame.K_KP6: "kp_6", pygame.K_KP7: "kp_7", pygame.K_KP8: "kp_8",
+    pygame.K_KP9: "kp_9", pygame.K_KP_ENTER: "enter",
+    pygame.K_KP_PLUS: "+", pygame.K_KP_MINUS: "-",
+    pygame.K_KP_MULTIPLY: "*", pygame.K_KP_DIVIDE: "/",
+    pygame.K_KP_PERIOD: "."
 }
+
+
+def calculate_letterbox(win_w: int, win_h: int, raw_w: int, raw_h: int) -> Tuple[int, int, int, int]:
+    """Calculate scaled dimensions and centered offsets to preserve aspect ratio."""
+    if win_w <= 0 or win_h <= 0 or raw_w <= 0 or raw_h <= 0:
+        return win_w, win_h, 0, 0
+
+    aspect = raw_w / raw_h
+    win_aspect = win_w / win_h
+
+    if win_aspect > aspect:
+        render_h = win_h
+        render_w = int(render_h * aspect)
+    else:
+        render_w = win_w
+        render_h = int(render_w / aspect)
+
+    offset_x = (win_w - render_w) // 2
+    offset_y = (win_h - render_h) // 2
+    return render_w, render_h, offset_x, offset_y
 
 
 class GhostScreenViewer:
@@ -54,9 +89,11 @@ class GhostScreenViewer:
         self.input_grabbed = True
         self.running = False
 
-        self.frame_queue = queue.Queue(maxsize=2)
+        # Zero-lag frame queue: size 1 drops stale frames immediately
+        self.frame_queue = queue.Queue(maxsize=1)
         self.event_queue = queue.Queue()
-        self.remote_res = (1920, 1080)
+        self.pending_mouse_pos: Optional[Tuple[float, float]] = None
+
         self.last_frame_time = time.time()
         self.fps = 0
         self.frame_count = 0
@@ -65,11 +102,9 @@ class GhostScreenViewer:
         console.print(f"[SCREEN] Connecting viewer window to ws://{self.host_ip}:{self.port}...")
         self.running = True
 
-        # Start network worker thread
         net_thread = threading.Thread(target=self._run_network_loop, daemon=True)
         net_thread.start()
 
-        # Start Pygame rendering in main thread
         self._run_gui_loop()
 
     def _run_network_loop(self):
@@ -78,12 +113,23 @@ class GhostScreenViewer:
     async def _network_client(self):
         while self.running:
             try:
-                async with websockets.connect(self.uri, max_size=10 * 1024 * 1024) as ws:
+                async with websockets.connect(
+                    self.uri,
+                    max_size=10 * 1024 * 1024,
+                    ping_interval=20,
+                    ping_timeout=20
+                ) as ws:
                     console.print(f"[OK] Connected to screen stream at {self.host_ip}")
 
                     async def send_events():
                         while self.running:
                             try:
+                                # Dispatch coalesced mouse position if available
+                                if self.pending_mouse_pos:
+                                    mx, my = self.pending_mouse_pos
+                                    self.pending_mouse_pos = None
+                                    await ws.send(json.dumps({"type": "mouse_move", "x": mx, "y": my}))
+
                                 event_data = self.event_queue.get_nowait()
                                 await ws.send(json.dumps(event_data))
                             except queue.Empty:
@@ -113,15 +159,18 @@ class GhostScreenViewer:
 
     def _run_gui_loop(self):
         pygame.init()
-        pygame.display.set_caption(f"CPUGhost Screen - [{self.host_ip}] (Ctrl+G Grab/Ungrab | F11 Fullscreen)")
+        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Ctrl+G Grab/Ungrab | F11 Fullscreen)")
         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         clock = pygame.time.Clock()
 
         current_surface = None
+        raw_w, raw_h = 1920, 1080
+        render_w, render_h = self.win_w, self.win_h
+        offset_x, offset_y = 0, 0
         font = pygame.font.SysFont("monospace", 14)
 
         while self.running:
-            # Handle Pygame events
+            # Handle Pygame input events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -131,6 +180,9 @@ class GhostScreenViewer:
                     if not self.fullscreen:
                         self.win_w, self.win_h = event.w, event.h
                         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
+                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                            self.win_w, self.win_h, raw_w, raw_h
+                        )
 
                 elif event.type == pygame.KEYDOWN:
                     # F11 Fullscreen toggle
@@ -142,6 +194,9 @@ class GhostScreenViewer:
                         else:
                             screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
                             self.win_w, self.win_h = 1280, 720
+                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                            self.win_w, self.win_h, raw_w, raw_h
+                        )
                         continue
 
                     # Ctrl+G to toggle input grab
@@ -149,6 +204,8 @@ class GhostScreenViewer:
                         self.input_grabbed = not self.input_grabbed
                         status_str = "Grabbed" if self.input_grabbed else "Released"
                         console.print(f"[SCREEN] Input focus: {status_str}")
+                        if not self.input_grabbed:
+                            pygame.mouse.set_visible(True)
                         continue
 
                     # Ctrl+Q or ESC when ungrabbed to quit
@@ -172,15 +229,24 @@ class GhostScreenViewer:
                             self.event_queue.put({"type": "key_up", "key": key_name})
 
                 elif event.type == pygame.MOUSEMOTION:
-                    if self.input_grabbed and current_surface:
-                        # Normalize coordinates
+                    if self.input_grabbed and render_w > 0 and render_h > 0:
                         mx, my = event.pos
-                        rx = mx / self.win_w
-                        ry = my / self.win_h
-                        self.event_queue.put({"type": "mouse_move", "x": rx, "y": ry})
+                        inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
+
+                        # Hide local cursor when hovering inside the remote desktop to avoid double cursor
+                        pygame.mouse.set_visible(not inside)
+
+                        rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
+                        ry = max(0.0, min(1.0, (my - offset_y) / render_h))
+                        self.pending_mouse_pos = (rx, ry)
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
-                    if self.input_grabbed:
+                    if self.input_grabbed and render_w > 0 and render_h > 0:
+                        mx, my = event.pos
+                        rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
+                        ry = max(0.0, min(1.0, (my - offset_y) / render_h))
+                        self.pending_mouse_pos = (rx, ry)
+
                         btn = "left"
                         if event.button == 3:
                             btn = "right"
@@ -209,7 +275,14 @@ class GhostScreenViewer:
             try:
                 frame_bytes = self.frame_queue.get_nowait()
                 raw_surface = pygame.image.load(io.BytesIO(frame_bytes))
-                current_surface = pygame.transform.scale(raw_surface, (self.win_w, self.win_h))
+                nw, nh = raw_surface.get_size()
+                if (nw, nh) != (raw_w, raw_h):
+                    raw_w, raw_h = nw, nh
+                    render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                        self.win_w, self.win_h, raw_w, raw_h
+                    )
+
+                current_surface = pygame.transform.scale(raw_surface, (render_w, render_h))
                 self.frame_count += 1
                 now = time.time()
                 if now - self.last_frame_time >= 1.0:
@@ -219,9 +292,10 @@ class GhostScreenViewer:
             except queue.Empty:
                 pass
 
-            # Render
+            # Render frame
             if current_surface:
-                screen.blit(current_surface, (0, 0))
+                screen.fill((0, 0, 0))  # Black letterbox bars
+                screen.blit(current_surface, (offset_x, offset_y))
             else:
                 screen.fill((18, 20, 24))
                 txt = font.render(f"[WAIT] Connecting to CPUGhost at {self.host_ip}:{self.port}...", True, (150, 150, 150))

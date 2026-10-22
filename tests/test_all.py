@@ -80,6 +80,38 @@ class TestCPUGhost(unittest.TestCase):
         ensure_display_environment()
         self.assertTrue(bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")))
 
+    def test_letterbox_aspect_ratio_preservation(self):
+        from cpughost.screen_viewer import calculate_letterbox
+
+        # 16:9 remote desktop inside 16:10 window (Letterbox: black bars top/bottom)
+        rw, rh, ox, oy = calculate_letterbox(win_w=1920, win_h=1200, raw_w=1920, raw_h=1080)
+        self.assertEqual(rw, 1920)
+        self.assertEqual(rh, 1080)
+        self.assertEqual(ox, 0)
+        self.assertEqual(oy, 60)  # (1200 - 1080) // 2
+
+        # 16:9 remote desktop inside ultrawide window (Pillarbox: black bars left/right)
+        rw, rh, ox, oy = calculate_letterbox(win_w=2560, win_h=1080, raw_w=1920, raw_h=1080)
+        self.assertEqual(rh, 1080)
+        self.assertEqual(rw, 1920)
+        self.assertEqual(ox, 320)  # (2560 - 1920) // 2
+        self.assertEqual(oy, 0)
+
+    def test_super_key_and_keyboard_mapping(self):
+        import pygame
+        from cpughost.screen_viewer import PYGAME_KEY_MAP
+        from cpughost.screen_server import KEY_MAPPING
+        from pynput.keyboard import Key
+
+        # Super/Windows key verification
+        self.assertEqual(PYGAME_KEY_MAP.get(pygame.K_LSUPER), "super")
+        self.assertEqual(PYGAME_KEY_MAP.get(pygame.K_RSUPER), "super")
+        self.assertEqual(KEY_MAPPING.get("super"), Key.cmd)
+
+        # Modifiers verification
+        for mod in ["ctrl", "alt", "shift", "return", "backspace", "tab", "esc"]:
+            self.assertIn(mod, KEY_MAPPING)
+
 
 if __name__ == "__main__":
     unittest.main()
