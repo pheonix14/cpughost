@@ -49,7 +49,7 @@ def print_ascii_banner():
     console.print(f"[bold cyan]{banner}[/bold cyan]")
 
 
-def resolve_host_ip(ip_arg: Optional[str]) -> Optional[str]:
+def resolve_host_ip(ip_arg: Optional[str], interactive: bool = True) -> Optional[str]:
     """Resolve host IP via argument, discovery beacon, or subnet scan."""
     if ip_arg:
         return ip_arg
@@ -57,28 +57,82 @@ def resolve_host_ip(ip_arg: Optional[str]) -> Optional[str]:
     cfg = load_config()
     last_ip = cfg.get("last_peer_ip")
 
-    console.print("[DISCOVERY] Scanning hotspot for CPUGhost host beacon...")
+    console.print("[DISCOVERY] Scanning hotspot for CPUGhost host beacons...")
     disc = GhostDiscovery(port=cfg.get("discovery_port", 8989))
     disc.start_listener()
-    host_info = disc.find_host(timeout=2.0)
+    time.sleep(1.8)
+    peers = [p for p in disc.get_active_peers() if "host" in p.get("roles", [])]
+
+    if not peers:
+        # Fallback to active subnet scan
+        active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888))
+        if active_ips:
+            for ip in active_ips:
+                peers.append({"ip": ip, "node_name": "Host", "roles": ["host"]})
+
     disc.stop()
 
-    if host_info:
-        host_ip = host_info["ip"]
-        console.print(f"[OK] Discovered CPUGhost Host at: {host_ip}")
+    if len(peers) == 1:
+        chosen_peer = peers[0]
+        host_ip = chosen_peer["ip"]
+        host_name = chosen_peer.get("node_name", "Host")
+        console.print(f"[OK] Discovered CPUGhost Host: {host_name} ({host_ip})")
         cfg["last_peer_ip"] = host_ip
         save_config(cfg)
         return host_ip
 
-    # Fallback to active subnet scan
-    console.print("[DISCOVERY] No beacon received, probing local subnet...")
-    active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888))
-    if active_ips:
-        host_ip = active_ips[0]
-        console.print(f"[OK] Found CPUGhost node via subnet scan: {host_ip}")
-        cfg["last_peer_ip"] = host_ip
-        save_config(cfg)
-        return host_ip
+    elif len(peers) > 1:
+        console.print("[DISCOVERY] Multiple CPUGhost PCs found on hotspot network:")
+        for idx, p in enumerate(peers, 1):
+            name = p.get("node_name", "Host")
+            ip = p["ip"]
+            console.print(f"  [{idx}] {name} ({ip})")
+
+        choice = click.prompt("Select PC to connect to", type=int, default=1)
+        if 1 <= choice <= len(peers):
+            chosen = peers[choice - 1]
+            cfg["last_peer_ip"] = chosen["ip"]
+            save_config(cfg)
+            return chosen["ip"]
+
+    # No peer found yet on first pass
+    if interactive and sys.stdin.isatty():
+        console.print("[WAIT] No CPUGhost Host detected yet on hotspot.")
+        console.print("  [1] Keep scanning (wait for Zorin PC to connect to hotspot)")
+        console.print("  [2] Enter IP address manually")
+        console.print("  [3] Use last known IP" + (f" ({last_ip})" if last_ip else ""))
+        console.print("  [0] Cancel")
+
+        opt = click.prompt("Select option", type=str, default="1")
+        if opt == "1":
+            console.print("[WAIT] Polling hotspot for Zorin PC beacon (timeout 30s)...")
+            disc = GhostDiscovery(port=cfg.get("discovery_port", 8989))
+            disc.start_listener()
+            start_t = time.time()
+            while time.time() - start_t < 30:
+                p_list = [p for p in disc.get_active_peers() if "host" in p.get("roles", [])]
+                if p_list:
+                    disc.stop()
+                    chosen = p_list[0]
+                    print("")
+                    console.print(f"[OK] Discovered Zorin PC: {chosen.get('node_name', 'Host')} ({chosen['ip']})")
+                    cfg["last_peer_ip"] = chosen["ip"]
+                    save_config(cfg)
+                    return chosen["ip"]
+                rem = int(30 - (time.time() - start_t))
+                sys.stdout.write(f"\r[WAIT] Listening on hotspot Wi-Fi... {rem}s remaining ")
+                sys.stdout.flush()
+                time.sleep(1.5)
+            disc.stop()
+            print("")
+            console.print("[WARN] Timed out waiting for Zorin PC beacon.")
+        elif opt == "2":
+            manual_ip = click.prompt("Enter Zorin PC IP address (e.g. 10.176.124.X)")
+            cfg["last_peer_ip"] = manual_ip
+            save_config(cfg)
+            return manual_ip
+        elif opt == "3" and last_ip:
+            return last_ip
 
     if last_ip:
         console.print(f"[WARN] No peer discovered. Using last known IP: {last_ip}")
@@ -95,7 +149,43 @@ def resolve_host_ip(ip_arg: Optional[str]) -> Optional[str]:
 def main(ctx):
     """CPUGhost: Dual-PC Hotspot Screen & Virtual Drive CLI."""
     if ctx.invoked_subcommand is None:
-        interactive_menu()
+        cfg = load_config()
+        if cfg.get("configured_role") is None and sys.stdin.isatty():
+            first_run_wizard()
+        else:
+            interactive_menu()
+
+
+def first_run_wizard():
+    """First-run setup wizard asking for computer role."""
+    print_ascii_banner()
+    local_ip = get_local_ip()
+    console.print("[bold green]WELCOME TO CPUGHOST FIRST-RUN SETUP[/bold green]")
+    console.print("------------------------------------------------------------------")
+    console.print(f" Detected Computer: {load_config().get('node_name', 'PC')} | Local IP: {local_ip}")
+    console.print("")
+    console.print(" Select role for this computer:")
+    console.print("  [1] Host / Secondary (Zorin OS headless PC - share screen & pen drive on boot)")
+    console.print("  [2] Client / Primary (Viewer PC - see Zorin screen in a window & use pen drive)")
+    console.print("------------------------------------------------------------------")
+
+    choice = click.prompt("Select role", type=str, default="2")
+    cfg = load_config()
+    ctx = click.get_current_context()
+
+    if choice == "1":
+        cfg["configured_role"] = "host"
+        save_config(cfg)
+        console.print("[INFO] Configuring as Headless Host...")
+        ctx.invoke(autostart_enable)
+        console.print("[INFO] Starting Host now...")
+        run_host()
+    else:
+        cfg["configured_role"] = "client"
+        save_config(cfg)
+        console.print("[INFO] Configuring as Primary Client...")
+        console.print("[INFO] Searching hotspot for your Zorin OS Host...")
+        ctx.invoke(client)
 
 
 @main.command()

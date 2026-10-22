@@ -119,11 +119,32 @@ fi
 
 echo "[OK] 'ghost' command installed to ${BIN_DIR}/ghost."
 
-# 4. Enable Startup on Boot
+# 4. Role Selection & Startup Configuration
 echo ""
-echo "[STEP 4/5] Enabling automated startup on boot..."
-"${BIN_DIR}/ghost" autostart enable
-echo "[OK] CPUGhost autostart enabled."
+echo "[STEP 4/5] Configuring PC role & startup..."
+ROLE_CHOICE="1"
+if [ -t 0 ]; then
+    echo "Select role for this computer:"
+    echo " [1] Host   : Secondary/Headless PC (Zorin OS: screen server + virtual pen drive) [Default]"
+    echo " [2] Client : Primary/Viewer PC (opens monitor window + mounts pen drive)"
+    read -r -t 15 -p "Enter choice [1/2, default 1 in 15s]: " USER_ROLE || USER_ROLE="1"
+    if [ "$USER_ROLE" = "2" ]; then
+        ROLE_CHOICE="2"
+    fi
+fi
+
+if [ "$ROLE_CHOICE" = "1" ]; then
+    echo "[INFO] Configuring as Headless Host..."
+    "${BIN_DIR}/ghost" autostart enable
+    python3 -c "from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'host'; save_config(c)" 2>/dev/null || true
+    echo "[OK] CPUGhost Host autostart enabled."
+else
+    echo "[INFO] Configuring as Primary Client..."
+    python3 -c "from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'client'; save_config(c)" 2>/dev/null || true
+    echo "[OK] CPUGhost Client mode configured."
+    echo "[INFO] Scanning hotspot for active Host PCs..."
+    "${BIN_DIR}/ghost" scan || true
+fi
 
 # 5. Zorin OS / Headless Configuration Guide
 echo ""
