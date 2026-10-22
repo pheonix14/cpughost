@@ -14,9 +14,11 @@ from .config import load_config, save_config, POINTER_COLORS
 
 console = Console()
 
+# Standard key name mapping for special keys
 PYGAME_KEY_MAP = {
     pygame.K_SPACE: "space",
     pygame.K_RETURN: "return",
+    pygame.K_KP_ENTER: "return",
     pygame.K_TAB: "tab",
     pygame.K_BACKSPACE: "backspace",
     pygame.K_DELETE: "delete",
@@ -35,24 +37,47 @@ PYGAME_KEY_MAP = {
     pygame.K_RSUPER: "super",
     pygame.K_LMETA: "super",
     pygame.K_RMETA: "super",
+    pygame.K_HOME: "home",
+    pygame.K_END: "end",
+    pygame.K_PAGEUP: "page up",
+    pygame.K_PAGEDOWN: "page down",
+    pygame.K_INSERT: "insert",
 }
 
 
 def calculate_letterbox(
-    win_w: int, win_h: int, frame_w: int = 1920, frame_h: int = 1080,
+    win_w: int, win_h: int,
+    frame_w: int = 1920, frame_h: int = 1080,
     raw_w: Optional[int] = None, raw_h: Optional[int] = None,
-    zoom: float = 1.0
+    zoom: float = 1.0,
+    force_16_9: bool = True
 ) -> Tuple[int, int, int, int]:
-    """Calculate scaled dimensions and offsets to preserve aspect ratio within window, with zoom support."""
+    """
+    Calculate scaled dimensions and offsets preserving 16:9 landscape aspect ratio.
+    Guarantees proper 16:9 widescreen presentation with zoom support.
+    """
     fw = raw_w if raw_w is not None else frame_w
     fh = raw_h if raw_h is not None else frame_h
     if fw <= 0 or fh <= 0 or win_w <= 0 or win_h <= 0:
         return win_w, win_h, 0, 0
 
-    base_scale = min(win_w / fw, win_h / fh)
-    scale = base_scale * max(0.2, min(2.5, zoom))
-    render_w = max(1, int(fw * scale))
-    render_h = max(1, int(fh * scale))
+    if force_16_9:
+        # Enforce exact 16:9 landscape aspect ratio (1.7777...)
+        target_aspect = 16.0 / 9.0
+    else:
+        target_aspect = fw / fh
+
+    # Fit target aspect ratio inside window bounds
+    if (win_w / win_h) > target_aspect:
+        base_h = win_h
+        base_w = int(win_h * target_aspect)
+    else:
+        base_w = win_w
+        base_h = int(win_w / target_aspect)
+
+    scale = max(0.2, min(2.5, zoom))
+    render_w = max(1, int(base_w * scale))
+    render_h = max(1, int(base_h * scale))
     offset_x = (win_w - render_w) // 2
     offset_y = (win_h - render_h) // 2
     return render_w, render_h, offset_x, offset_y
@@ -90,12 +115,13 @@ class GhostScreenViewer:
         self.audio_port = audio_port
         self.uri = f"ws://{host_ip}:{port}"
         self.audio_uri = f"ws://{host_ip}:{audio_port}"
+        # 16:9 Landscape window dimensions
         self.win_w = initial_width
         self.win_h = initial_height
         self.fullscreen = False
         self.running = False
-        self.input_grabbed = False
         self.mouse_pressed = False
+        self.force_16_9 = True
 
         self.frame_queue = queue.Queue(maxsize=3)
         self.event_queue = queue.Queue()
@@ -136,7 +162,7 @@ class GhostScreenViewer:
         cfg = load_config()
         cfg["screen_zoom"] = self.zoom
         save_config(cfg)
-        self.show_toast(f"Screen Zoom: {int(self.zoom * 100)}% (F8/F9 or +/-)")
+        self.show_toast(f"Screen Zoom: {int(self.zoom * 100)}% (F8/F9)")
 
     def set_zoom(self, val: float):
         """Set screen zoom level directly."""
@@ -144,7 +170,13 @@ class GhostScreenViewer:
         cfg = load_config()
         cfg["screen_zoom"] = self.zoom
         save_config(cfg)
-        self.show_toast(f"Screen Zoom: {int(self.zoom * 100)}% (F10 Reset)")
+        self.show_toast(f"Screen Zoom Reset: {int(self.zoom * 100)}% (F10)")
+
+    def toggle_aspect_ratio(self):
+        """Toggle between forced 16:9 landscape and native aspect ratio."""
+        self.force_16_9 = not self.force_16_9
+        mode_str = "16:9 Landscape" if self.force_16_9 else "Native Stream Ratio"
+        self.show_toast(f"Aspect Ratio: {mode_str} (F5)")
 
     def cycle_pointer_color(self):
         """Cycle through Zorin accent colors in real-time."""
@@ -155,7 +187,7 @@ class GhostScreenViewer:
         cfg = load_config()
         cfg["pointer_color"] = self.pointer_color_key
         save_config(cfg)
-        self.show_toast(f"Pointer Color: {color_info['name']} (F6 / C to cycle)")
+        self.show_toast(f"Pointer Color: {color_info['name']} (F6)")
 
     def cycle_pointer_size(self):
         """Cycle through pointer sizes in real-time."""
@@ -172,7 +204,7 @@ class GhostScreenViewer:
         cfg = load_config()
         cfg["pointer_scale"] = self.pointer_scale
         save_config(cfg)
-        self.show_toast(f"Pointer Size: {self.pointer_scale}x (F7 / P to cycle)")
+        self.show_toast(f"Pointer Size: {self.pointer_scale}x (F7)")
 
     def show_toast(self, msg: str, duration: float = 2.0):
         self.toast_msg = msg
@@ -280,14 +312,20 @@ class GhostScreenViewer:
 
     def _run_gui_loop(self):
         pygame.init()
-        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Ctrl+G Grab/Ungrab | F8/F9 Zoom | F6 Color | F11 Fullscreen)")
+        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (16:9 Landscape | F8/F9 Zoom | F6 Color | F11 Fullscreen)")
         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         clock = pygame.time.Clock()
+
+        # NEVER trap or lock the mouse inside the window
+        try:
+            pygame.event.set_grab(False)
+        except Exception:
+            pass
 
         current_surface = None
         raw_w, raw_h = 1920, 1080
         render_w, render_h, offset_x, offset_y = calculate_letterbox(
-            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
+            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
         )
         font = pygame.font.SysFont("monospace", 14)
 
@@ -302,11 +340,12 @@ class GhostScreenViewer:
                         self.win_w, self.win_h = event.w, event.h
                         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
 
                 elif event.type == pygame.KEYDOWN:
-                    # F11 Fullscreen toggle
+                    # Dedicated Function Keys (NEVER intercept regular letters or symbols like c, p, -, +, =)
+                    # F11: Fullscreen toggle
                     if event.key == pygame.K_F11:
                         self.fullscreen = not self.fullscreen
                         if self.fullscreen:
@@ -316,86 +355,63 @@ class GhostScreenViewer:
                             screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
                             self.win_w, self.win_h = 1280, 720
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
                         continue
 
-                    # Ctrl+G to toggle input grab
-                    if event.key == pygame.K_g and (pygame.key.get_mods() & pygame.KMOD_CTRL):
-                        self.input_grabbed = not self.input_grabbed
-                        try:
-                            pygame.event.set_grab(self.input_grabbed)
-                        except Exception:
-                            pass
-                        status_str = "Grabbed" if self.input_grabbed else "Released"
-                        console.print(f"[SCREEN] Input focus: {status_str}")
-                        if not self.input_grabbed:
-                            pygame.mouse.set_visible(True)
-                        self.show_toast(f"Input Focus: {status_str}")
-                        continue
-
-                    # Zoom out: F8, Ctrl+minus, or (ungrabbed and minus)
-                    if event.key == pygame.K_F8 or \
-                       (event.key in (pygame.K_MINUS, pygame.K_KP_MINUS) and (pygame.key.get_mods() & pygame.KMOD_CTRL)) or \
-                       (not self.input_grabbed and event.key in (pygame.K_MINUS, pygame.K_KP_MINUS)):
-                        self.adjust_zoom(-0.05)
+                    # F5: Toggle 16:9 Landscape vs Native aspect ratio
+                    if event.key == pygame.K_F5:
+                        self.toggle_aspect_ratio()
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
                         continue
 
-                    # Zoom in: F9, Ctrl+plus/equals, or (ungrabbed and plus/equals)
-                    if event.key == pygame.K_F9 or \
-                       (event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS) and (pygame.key.get_mods() & pygame.KMOD_CTRL)) or \
-                       (not self.input_grabbed and event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_KP_PLUS)):
-                        self.adjust_zoom(+0.05)
-                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
-                        )
-                        continue
-
-                    # Reset zoom: F10, or Ctrl+0
-                    if event.key == pygame.K_F10 or \
-                       (event.key in (pygame.K_0, pygame.K_KP0) and (pygame.key.get_mods() & pygame.KMOD_CTRL)):
-                        self.set_zoom(0.90)
-                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
-                        )
-                        continue
-
-                    # F6 or (ungrabbed and K_c): cycle pointer color
-                    if event.key == pygame.K_F6 or (not self.input_grabbed and event.key == pygame.K_c):
+                    # F6: cycle pointer color
+                    if event.key == pygame.K_F6:
                         self.cycle_pointer_color()
                         continue
 
-                    # F7 or (ungrabbed and K_p): cycle pointer size
-                    if event.key == pygame.K_F7 or (not self.input_grabbed and event.key == pygame.K_p):
+                    # F7: cycle pointer size
+                    if event.key == pygame.K_F7:
                         self.cycle_pointer_size()
                         continue
 
-                    # Ctrl+Q or ESC when ungrabbed to quit
-                    if not self.input_grabbed and event.key == pygame.K_ESCAPE:
-                        self.running = False
-                        break
-                    if event.key == pygame.K_q and (pygame.key.get_mods() & pygame.KMOD_CTRL):
+                    # F8: Zoom out (reduce screen size)
+                    if event.key == pygame.K_F8:
+                        self.adjust_zoom(-0.05)
+                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
+                        )
+                        continue
+
+                    # F9: Zoom in (increase screen size)
+                    if event.key == pygame.K_F9:
+                        self.adjust_zoom(+0.05)
+                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
+                        )
+                        continue
+
+                    # F10: Reset zoom to 90%
+                    if event.key == pygame.K_F10:
+                        self.set_zoom(0.90)
+                        render_w, render_h, offset_x, offset_y = calculate_letterbox(
+                            self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
+                        )
+                        continue
+
+                    # Ctrl+Shift+Q to quit viewer
+                    if event.key == pygame.K_q and (pygame.key.get_mods() & pygame.KMOD_CTRL) and (pygame.key.get_mods() & pygame.KMOD_SHIFT):
                         self.running = False
                         break
 
-                    # Keyboard typing transmission
+                    # ALL OTHER KEYS PASS DIRECTLY THROUGH TO ZORIN (letters, symbols, enter, backspace, bash shortcuts)
                     key_name = PYGAME_KEY_MAP.get(event.key)
                     if not key_name:
                         key_name = pygame.key.name(event.key)
 
-                    # Auto-grab focus when user types inside window
-                    if not self.input_grabbed and key_name and key_name not in ("esc", "escape"):
-                        self.input_grabbed = True
-                        try:
-                            pygame.event.set_grab(True)
-                        except Exception:
-                            pass
-                        self.show_toast("Input Grabbed (Ctrl+G to release)")
-
-                    if self.input_grabbed and key_name:
+                    if key_name:
                         self.event_queue.put({"type": "key_down", "key": key_name})
 
                 elif event.type == pygame.KEYUP:
@@ -403,7 +419,7 @@ class GhostScreenViewer:
                     if not key_name:
                         key_name = pygame.key.name(event.key)
 
-                    if self.input_grabbed and key_name:
+                    if key_name:
                         self.event_queue.put({"type": "key_up", "key": key_name})
 
                 elif event.type == pygame.MOUSEMOTION:
@@ -412,9 +428,11 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
 
+                    # Hide default OS pointer ONLY when inside the remote screen; show normally outside
                     pygame.mouse.set_visible(not inside)
 
-                    if render_w > 0 and render_h > 0 and (self.input_grabbed or self.mouse_pressed):
+                    # Seamless mouse tracking: cursor roams freely, never trapped
+                    if inside and render_w > 0 and render_h > 0:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
@@ -427,15 +445,7 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
 
-                    # Auto-grab focus when clicking inside the remote desktop
-                    if inside and not self.input_grabbed:
-                        self.input_grabbed = True
-                        try:
-                            pygame.event.set_grab(True)
-                        except Exception:
-                            pass
-                        self.show_toast("Input Grabbed (Ctrl+G to release)")
-
+                    # Never lock mouse cursor inside the window
                     if inside and render_w > 0 and render_h > 0:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
@@ -467,7 +477,7 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.mouse_pressed = False
 
-                    if (inside or self.input_grabbed) and render_w > 0 and render_h > 0:
+                    if inside and render_w > 0 and render_h > 0:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
@@ -489,7 +499,7 @@ class GhostScreenViewer:
                 if (nw, nh) != (raw_w, raw_h):
                     raw_w, raw_h = nw, nh
                     render_w, render_h, offset_x, offset_y = calculate_letterbox(
-                        self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom
+                        self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                     )
 
                 if (render_w, render_h) != (raw_w, raw_h):
@@ -507,13 +517,12 @@ class GhostScreenViewer:
                 pass
 
             # Render frame
-            screen.fill((16, 20, 26))  # Dark matte canvas background
+            screen.fill((16, 20, 26))  # Matte dark background
             if self.connected and current_surface:
                 screen.blit(current_surface, (offset_x, offset_y))
-                # Canvas boundary border when zoomed out
-                if self.zoom < 0.99:
-                    border_rect = pygame.Rect(offset_x - 1, offset_y - 1, render_w + 2, render_h + 2)
-                    pygame.draw.rect(screen, (40, 50, 65), border_rect, 1)
+                # 16:9 Landscape boundary frame
+                border_rect = pygame.Rect(offset_x - 1, offset_y - 1, render_w + 2, render_h + 2)
+                pygame.draw.rect(screen, (40, 52, 68), border_rect, 1)
             else:
                 title = font.render(f"[CPUGHOST MONITOR] Connecting to {self.host_ip}:{self.port}...", True, (0, 255, 170))
                 sub = font.render("Waiting for host screen service to stream. Auto-reconnecting in background...", True, (160, 170, 185))
@@ -534,11 +543,11 @@ class GhostScreenViewer:
                 self.click_ripples = active_ripples
                 screen.blit(ripple_surf, (0, 0))
 
-            # Draw custom colored pointer
+            # Draw custom colored pointer over remote canvas
             if self.cursor_visible and self.cursor_pos and self.cursor_surface:
                 screen.blit(self.cursor_surface, self.cursor_pos)
 
-            # Toast banner (e.g. pointer color changed, zoom adjusted)
+            # Toast banner
             if self.toast_msg and time.time() < self.toast_until:
                 t_surf = font.render(f"[ {self.toast_msg} ]", True, (255, 255, 255))
                 t_bg = pygame.Surface((t_surf.get_width() + 24, t_surf.get_height() + 12), pygame.SRCALPHA)
@@ -550,16 +559,13 @@ class GhostScreenViewer:
 
             # HUD overlay
             color_name = POINTER_COLORS[self.pointer_color_key]["name"]
-            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | Zoom: {int(self.zoom * 100)}% (F8/F9) | Pointer: {color_name} (F6) | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Click inside to interact'} | F11"
+            aspect_name = "16:9 Landscape" if self.force_16_9 else "Native"
+            hud_text = f"{self.fps} FPS | {aspect_name} (F5) | Zoom: {int(self.zoom * 100)}% (F8/F9) | Pointer: {color_name} (F6) | F11"
             hud_surface = font.render(hud_text, True, (200, 200, 200))
             hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
             hud_bg.fill((0, 0, 0, 160))
             hud_bg.blit(hud_surface, (8, 4))
             screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, 12))
-
-            if not self.input_grabbed:
-                banner = font.render("[CLICK SCREEN TO INTERACT] Auto-grabs focus on click or typing | Ctrl+G to release", True, (255, 200, 50))
-                screen.blit(banner, (15, 15))
 
             pygame.display.flip()
             clock.tick(60)
