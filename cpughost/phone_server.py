@@ -9,6 +9,7 @@ import io
 import time
 import json
 import socket
+import shutil
 import asyncio
 import threading
 import subprocess
@@ -36,10 +37,9 @@ class PhoneScreenStreamer:
         self._check_adb()
 
     def _check_adb(self):
-        adb = subprocess.run(["which", "adb"], capture_output=True, text=True)
-        if adb.returncode == 0 and adb.stdout.strip():
-            self.adb_bin = adb.stdout.strip()
-            # Test adb devices
+        adb_path = shutil.which("adb")
+        if adb_path:
+            self.adb_bin = adb_path
             res = subprocess.run([self.adb_bin, "devices"], capture_output=True, text=True)
             lines = [l for l in res.stdout.strip().splitlines()[1:] if l.strip()]
             self.adb_available = len(lines) > 0 and any("device" in l for l in lines)
@@ -206,11 +206,13 @@ class GhostPhoneHostService:
                 self.clients.discard(websocket)
                 console.print("[PHONE HOST] PC Zero viewer disconnected.")
 
-        server = await websockets.serve(handler, self.host, self.port)
-        await asyncio.gather(server.wait_closed(), self.broadcast_loop())
+        self._server = await websockets.serve(handler, self.host, self.port)
+        await asyncio.gather(self._server.wait_closed(), self.broadcast_loop())
 
     def stop(self):
         self.running = False
+        if hasattr(self, "_server") and self._server:
+            self._server.close()
 
 
 def run_phone_host_service():
