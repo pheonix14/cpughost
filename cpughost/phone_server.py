@@ -53,91 +53,74 @@ class PhoneScreenStreamer:
         self._check_adb()
 
     def _check_adb(self):
-        if self.adb_bin:
+        adb_path = shutil.which("adb")
+        if adb_path:
+            self.adb_bin = adb_path
             try:
-                res = subprocess.run([self.adb_bin, "devices"], capture_output=True, text=True, timeout=1.0)
-                lines = [l for l in res.stdout.strip().splitlines()[1:] if l.strip()]
-                self.adb_available = any("\tdevice" in l for l in lines)
+                subprocess.run([self.adb_bin, "connect", "127.0.0.1:5555"], capture_output=True, timeout=2.0)
             except Exception:
-                self.adb_available = False
+                pass
+            res = subprocess.run([self.adb_bin, "devices"], capture_output=True, text=True)
+            lines = [l for l in res.stdout.strip().splitlines()[1:] if l.strip()]
+            self.adb_available = len(lines) > 0 and any("device" in l for l in lines)
 
     def capture_frame(self) -> bytes:
-        """Capture screenshot via ADB if available, or generate live phone dashboard canvas."""
+        """Capture real phone frame using native screencap or ADB."""
         now = time.time()
-        # Cache frame for 0.03s to save CPU when multiple endpoints query simultaneously
         if self._last_frame_bytes and (now - self._last_frame_time) < (1.0 / (self.fps * 1.5)):
             return self._last_frame_bytes
 
-        # Try ADB screencap if device is connected
+        if not self.adb_available:
+            self._check_adb()
+
         if self.adb_available and self.adb_bin:
             try:
                 proc = subprocess.run(
                     [self.adb_bin, "exec-out", "screencap", "-p"],
                     capture_output=True,
-                    timeout=1.2
+                    timeout=2.5
                 )
                 if proc.returncode == 0 and proc.stdout and proc.stdout.startswith(b"\x89PNG"):
                     img = Image.open(io.BytesIO(proc.stdout)).convert("RGB")
-                    img.thumbnail((720, 1280), Image.BILINEAR)
+                    img.thumbnail((720, 1600), Image.BILINEAR)
                     buf = io.BytesIO()
                     img.save(buf, format="JPEG", quality=self.quality)
-                    frame_data = buf.getvalue()
-                    self._last_frame_bytes = frame_data
+                    frame = buf.getvalue()
+                    self._last_frame_bytes = frame
                     self._last_frame_time = now
-                    return frame_data
+                    return frame
             except Exception:
                 self._check_adb()
 
-        frame_data = self._generate_status_canvas()
-        self._last_frame_bytes = frame_data
-        self._last_frame_time = now
-        return frame_data
+        # Try root screencap if available
+        try:
+            proc = subprocess.run(["su", "-c", "screencap", "-p"], capture_output=True, timeout=2.0)
+            if proc.returncode == 0 and proc.stdout and proc.stdout.startswith(b"\x89PNG"):
+                img = Image.open(io.BytesIO(proc.stdout)).convert("RGB")
+                img.thumbnail((720, 1600), Image.BILINEAR)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=self.quality)
+                frame = buf.getvalue()
+                self._last_frame_bytes = frame
+                self._last_frame_time = now
+                return frame
+        except Exception:
+            pass
 
-    def _generate_status_canvas(self) -> bytes:
+        if self._last_frame_bytes:
+            return self._last_frame_bytes
+
+        # Fallback: Clean minimalist standby frame
         w, h = 720, 1280
         img = Image.new("RGB", (w, h), color=(15, 23, 42))
         draw = ImageDraw.Draw(img)
-
-        # Header bar
-        draw.rectangle([(0, 0), (w, 90)], fill=(30, 41, 59))
-        draw.text((30, 30), "CPUGHOST // PHONE HOST", fill=(0, 215, 230))
-        draw.text((w - 200, 30), time.strftime("%H:%M:%S"), fill=(148, 163, 184))
-
-        # Status cards
-        local_ip = get_local_ip()
-        draw.rectangle([(40, 120), (w - 40, 290)], fill=(30, 41, 59), outline=(51, 65, 85), width=2)
-        draw.text((60, 140), "PC ZERO CONNECTION ACTIVE", fill=(34, 197, 94))
-        draw.text((60, 175), f"Phone Node: {local_ip} (Samsung SM-M366B)", fill=(255, 255, 255))
-        draw.text((60, 210), f"Screen Stream: ws://{local_ip}:8889", fill=(148, 163, 184))
-        draw.text((60, 245), f"Virtual Pen Drive: http://{local_ip}:8888", fill=(148, 163, 184))
-
-        # Live telemetry feed card
-        draw.rectangle([(40, 320), (w - 40, 680)], fill=(24, 32, 47), outline=(0, 215, 230), width=2)
-        draw.text((60, 345), "SYSTEM TELEMETRY // CAESAR", fill=(0, 215, 230))
-        draw.text((60, 390), "Target Host: zero (10.176.124.73)", fill=(34, 197, 94))
-        draw.text((60, 435), f"Drive Path: {STORAGE_DIR}", fill=(255, 255, 255))
-        draw.text((60, 480), "Web Dashboard: http://10.176.124.51:8888", fill=(148, 163, 184))
-        draw.text((60, 525), "MJPEG Feed: http://10.176.124.51:8888/stream.mjpg", fill=(148, 163, 184))
-        draw.text((60, 570), "Input Mode: Remote Mouse & Keyboard Passthrough", fill=(255, 255, 255))
-        adb_status = "ONLINE (OS Mirror Active)" if self.adb_available else "STANDBY (Canvas Stream Active)"
-        draw.text((60, 615), f"Android ADB: {adb_status}", fill=(0, 215, 230) if self.adb_available else (234, 179, 8))
-
-        # Live pulsating visualizer
-        sec = int(time.time() * 3) % 10
-        for i in range(10):
-            color = (0, 215, 230) if i <= sec else (51, 65, 85)
-            draw.rectangle([(60 + i * 60, 720), (100 + i * 60, 750)], fill=color)
-
-        # Quick Control / Guide Card
-        draw.rectangle([(40, 790), (w - 40, 1180)], fill=(30, 41, 59), outline=(51, 65, 85), width=2)
-        draw.text((60, 815), "WIRELESS CONTROL MODES", fill=(0, 215, 230))
-        draw.text((60, 860), "1. Native PC Viewer: ghost view 10.176.124.51", fill=(255, 255, 255))
-        draw.text((60, 905), "2. Web Browser: Open http://10.176.124.51:8888 on PC", fill=(255, 255, 255))
-        draw.text((60, 950), "3. Virtual Pen Drive: Drag & drop files on Web UI", fill=(255, 255, 255))
-        draw.text((60, 995), "4. Wireless Debugging: Developer Options -> Pair", fill=(148, 163, 184))
-        draw.text((60, 1040), "   Enter pairing port & code via Web UI to mirror OS", fill=(148, 163, 184))
-        draw.text((60, 1100), "CPUGhost Protocol v7.4 // rayzien // pheonix14", fill=(71, 85, 105))
-
+        draw.text((w // 2 - 100, h // 2 - 10), "Connecting Caesar Phone...", fill=(0, 215, 230))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=self.quality)
+        frame_data = buf.getvalue()
+        self._last_frame_bytes = frame_data
+        self._last_frame_time = now
+        return frame_data
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=self.quality)
         return buf.getvalue()
@@ -385,10 +368,10 @@ class PhoneDriveHandler(BaseHTTPRequestHandler):
                 <img id="liveStream" class="screen-img" src="/stream.mjpg" alt="Live Phone Screen" />
             </div>
             <div class="btn-group">
-                <button class="btn" onclick="sendInput('key', 'back')">◀ Back</button>
-                <button class="btn" onclick="sendInput('key', 'home')">● Home</button>
-                <button class="btn" onclick="sendInput('key', 'app_switch')">■ Apps</button>
-                <button class="btn" onclick="toggleFullscreen()">⛶ Fullscreen</button>
+                <button class="btn" onclick="sendInput('key', 'back')">[Back]</button>
+                <button class="btn" onclick="sendInput('key', 'home')">[Home]</button>
+                <button class="btn" onclick="sendInput('key', 'app_switch')">[Apps]</button>
+                <button class="btn" onclick="toggleFullscreen()">[Fullscreen]</button>
             </div>
             <p style="font-size: 0.75rem; color: #64748b; margin-top: 8px;">Tap / Click on screen to interact directly with phone</p>
         </div>

@@ -199,43 +199,10 @@ def launch_phone_mirror(
     max_size: int = 1920,
     bit_rate: str = "8M",
     max_fps: int = 60
-) -> Optional[subprocess.Popen]:
+):
     """
-    Launch high-performance, low-latency screen mirroring and control via scrcpy.
-    Provides hardware-accelerated video, audio, touch control, keyboard typing,
-    and clipboard synchronization.
+    Launch native CPUGhost hardware screen mirror and touch controller.
+    Runs 100% in CPUGhost without requiring scrcpy.
     """
-    if not is_scrcpy_installed():
-        console.print("[ERR] scrcpy is not installed. Please install scrcpy for high-speed mirroring.")
-        return None
-
-    cmd = [
-        "scrcpy",
-        f"--window-title=CPUGhost Phone - {phone_name}",
-        "--shortcut-mod=lctrl,rctrl",
-        f"--max-size={max_size}",
-        f"--bit-rate={bit_rate}",
-        f"--max-fps={max_fps}",
-    ]
-
-    if always_on_top:
-        cmd.append("--always-on-top")
-    if stay_awake:
-        cmd.append("--stay-awake")
-    if turn_screen_off:
-        cmd.append("--turn-screen-off")
-    if serial:
-        cmd.extend(["-s", serial])
-
-    console.print(f"[PHONE] Launching high-performance mirror & control window for [bold cyan]{phone_name}[/bold cyan]...")
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            preexec_fn=os.setpgrp
-        )
-        return proc
-    except Exception as e:
-        console.print(f"[ERR] Failed to start scrcpy: {e}")
-        return None
+    from .phone_native import run_native_phone_mirror
+    return run_native_phone_mirror(target_ip=serial, phone_name=phone_name)

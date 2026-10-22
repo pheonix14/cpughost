@@ -683,18 +683,9 @@ def phone_cmd(device_or_ip: Optional[str] = None, name: str = "Caesar", wireless
         else:
             return
 
-    if is_scrcpy_installed():
-        console.print(f"[OK] Launching hardware-accelerated mirror and control for {name} ({serial})...")
-        proc = launch_phone_mirror(
-            serial=serial,
-            phone_name=name,
-            turn_screen_off=turn_screen_off
-        )
-        if proc:
-            proc.wait()
-    else:
-        console.print("[WARN] scrcpy is not installed. You can install it with: sudo apt install scrcpy")
-        console.print("[INFO] Phone connected via ADB. You can view Caesar inside CPUGhost viewer (Screen 9 / Caesar tab)!")
+    console.print(f"[OK] Launching CPUGhost native screen mirror and control for {name} ({serial})...")
+    from .phone_native import run_native_phone_mirror
+    run_native_phone_mirror(target_ip=serial, phone_name=name)
 
 
 @main.command(name="caesar")

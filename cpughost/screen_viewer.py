@@ -161,7 +161,7 @@ class GhostScreenViewer:
 
         # Multi-Screen (>5 Screens + Caesar Phone) Management
         self.current_screen_id: int = screen_id if screen_id is not None else int(cfg.get("active_screen", 1))
-        self.show_screen_tabs: bool = True
+        self.show_screen_tabs: bool = False
         self.screen_tabs: List[Tuple[int, str, pygame.Rect]] = []
         self.available_screens = {
             1: "Main 1",
@@ -693,6 +693,20 @@ class GhostScreenViewer:
                 nw, nh = raw_surface.get_size()
                 if (nw, nh) != (raw_w, raw_h):
                     raw_w, raw_h = nw, nh
+                    # Auto-fit window aspect ratio if switching between portrait (phone) and landscape (PC)
+                    if nh > nw and self.win_w > self.win_h:
+                        target_h = min(880, nh)
+                        target_w = max(360, int(target_h * (nw / nh)))
+                        self.win_w, self.win_h = target_w, target_h
+                        screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
+                        self._apply_grab_settings()
+                    elif nw >= nh and self.win_h > self.win_w:
+                        target_w = min(1280, nw)
+                        target_h = max(720, int(target_w * (nh / nw)))
+                        self.win_w, self.win_h = target_w, target_h
+                        screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
+                        self._apply_grab_settings()
+
                     render_w, render_h, offset_x, offset_y = calculate_letterbox(
                         self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                     )
@@ -711,38 +725,17 @@ class GhostScreenViewer:
             except queue.Empty:
                 pass
 
-            # Render frame
+            # Render clean edge-to-edge frame
             screen.fill((16, 20, 26))  # Matte dark background
             if self.connected and current_surface:
                 screen.blit(current_surface, (offset_x, offset_y))
-                # 16:9 Landscape boundary frame
-                border_rect = pygame.Rect(offset_x - 1, offset_y - 1, render_w + 2, render_h + 2)
-                pygame.draw.rect(screen, (40, 52, 68), border_rect, 1)
             else:
                 title = font.render(f"[CPUGHOST MONITOR] Connecting to {self.host_ip}:{self.port}...", True, (0, 255, 170))
                 sub = font.render("Waiting for host screen service to stream. Auto-reconnecting in background...", True, (160, 170, 185))
                 screen.blit(title, (40, self.win_h // 2 - 25))
                 screen.blit(sub, (40, self.win_h // 2 + 5))
 
-            # Click ripple animations
-            if self.click_ripples:
-                ripple_surf = pygame.Surface((self.win_w, self.win_h), pygame.SRCALPHA)
-                active_ripples = []
-                for r in self.click_ripples:
-                    r["radius"] += 2.0
-                    r["alpha"] = max(0, r["alpha"] - 18)
-                    if r["alpha"] > 0 and r["radius"] <= r["max_radius"]:
-                        c = r["color"]
-                        pygame.gfxdraw.aacircle(ripple_surf, int(r["x"]), int(r["y"]), int(r["radius"]), (*c, int(r["alpha"])))
-                        active_ripples.append(r)
-                self.click_ripples = active_ripples
-                screen.blit(ripple_surf, (0, 0))
-
-            # Draw custom colored pointer over remote canvas
-            if self.cursor_visible and self.cursor_pos and self.cursor_surface:
-                screen.blit(self.cursor_surface, self.cursor_pos)
-
-            # Toast banner
+            # Toast notification banner (only shows briefly when hotkeys are pressed)
             if self.toast_msg and time.time() < self.toast_until:
                 t_surf = font.render(f"[ {self.toast_msg} ]", True, (255, 255, 255))
                 t_bg = pygame.Surface((t_surf.get_width() + 24, t_surf.get_height() + 12), pygame.SRCALPHA)
@@ -752,7 +745,7 @@ class GhostScreenViewer:
                 t_bg.blit(t_surf, (12, 6))
                 screen.blit(t_bg, ((self.win_w - t_bg.get_width()) // 2, 70))
 
-            # Render Multi-Screen Selector Tabs Bar at top (Screens 1..8, Caesar Phone, All 0)
+            # Render Multi-Screen Selector Tabs Bar only if user pressed F1
             if self.show_screen_tabs:
                 self.screen_tabs = []
                 tab_h = 24
@@ -786,18 +779,6 @@ class GhostScreenViewer:
                     t_surf.blit(t_txt, (7, 4))
                     screen.blit(t_surf, (cur_x, tab_y))
                     cur_x += t_w + 5
-
-            # HUD overlay
-            color_name = POINTER_COLORS[self.pointer_color_key]["name"]
-            aspect_name = "16:9 Landscape" if self.force_16_9 else "Normal Ratio"
-            cur_sname = self.available_screens.get(self.current_screen_id, f"Screen {self.current_screen_id}")
-            hud_text = f"{self.fps} FPS | {cur_sname} (F2/F3) | {aspect_name} (F5) | Zoom: {int(self.zoom * 100)}% (F8/F9) | F11"
-            hud_surface = font.render(hud_text, True, (200, 200, 200))
-            hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
-            hud_bg.fill((0, 0, 0, 160))
-            hud_bg.blit(hud_surface, (8, 4))
-            hud_y = 36 if self.show_screen_tabs else 12
-            screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, hud_y))
 
             pygame.display.flip()
             clock.tick(60)

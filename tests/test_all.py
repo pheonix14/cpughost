@@ -235,6 +235,18 @@ WaylandEnable=false
         viewer.cycle_next_screen()
         self.assertEqual(viewer.current_screen_id, 2)
 
+    def test_native_phone_mirror_engine(self):
+        from cpughost.phone_native import GhostNativePhoneMirror
+        mirror = GhostNativePhoneMirror("10.176.124.51:5555", phone_name="Caesar")
+        self.assertEqual(mirror.serial, "10.176.124.51:5555")
+        self.assertEqual(mirror.phone_name, "Caesar")
+        self.assertGreater(mirror.win_w, 0)
+        self.assertGreater(mirror.win_h, 0)
+        self.assertFalse(mirror.running)
+        self.assertTrue(hasattr(mirror, "_stream_worker"))
+        self.assertTrue(hasattr(mirror, "_input_worker"))
+        self.assertTrue(hasattr(mirror, "_ensure_free_mouse"))
+
 
 if __name__ == "__main__":
     unittest.main()

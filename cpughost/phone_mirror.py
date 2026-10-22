@@ -340,36 +340,10 @@ def launch_phone_mirror(
     table.add_row("Drag-and-Drop file", "Push file to phone Download folder / install APK")
 
     console.print(table)
-    console.print(f"[OK] Launching hardware-accelerated mirror for [bold green]{device_target}[/bold green]...")
+    console.print(f"[OK] Launching CPUGhost native mirror for [bold green]{device_target}[/bold green]...")
 
-    # 5. Build scrcpy command
-    scrcpy_cmd = [
-        "scrcpy",
-        "-s", device_target,
-        f"--window-title=CPUGhost - Phone Mirror ({device_target})",
-        f"--video-bit-rate={bitrate}",
-        f"--max-fps={max_fps}",
-    ]
-
-    if stay_awake:
-        scrcpy_cmd.append("--stay-awake")
-
-    if turn_screen_off:
-        scrcpy_cmd.append("--turn-screen-off")
-
-    if not audio:
-        scrcpy_cmd.append("--no-audio")
-    else:
-        scrcpy_cmd.append("--audio-buffer=50")
-
-    try:
-        proc = subprocess.run(scrcpy_cmd)
-        if proc.returncode != 0:
-            console.print(f"[INFO] scrcpy exited with code {proc.returncode}")
-    except KeyboardInterrupt:
-        console.print("\n[INFO] Phone mirror closed.")
-    except Exception as e:
-        console.print(f"[FAIL] Error launching scrcpy: {e}")
+    from .phone_native import run_native_phone_mirror
+    run_native_phone_mirror(target_ip=device_target, phone_name="Caesar")
 
 
 def interactive_phone_menu():
