@@ -244,8 +244,10 @@ WaylandEnable=false
         self.assertGreater(mirror.win_h, 0)
         self.assertFalse(mirror.running)
         self.assertTrue(hasattr(mirror, "_stream_worker"))
-        self.assertTrue(hasattr(mirror, "_input_worker"))
+        self.assertTrue(hasattr(mirror, "shell"))
+        self.assertTrue(hasattr(mirror.shell, "send_cmd"))
         self.assertTrue(hasattr(mirror, "_ensure_free_mouse"))
+        mirror.shell.close()
 
 
 if __name__ == "__main__":

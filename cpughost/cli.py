@@ -62,47 +62,29 @@ def notify_desktop(title: str, message: str):
 
 
 def check_and_apply_auto_update(silent: bool = True):
+    auto_update_from_github()
+
+
+def auto_update_from_github():
     """
     Check GitHub for updates.
-    Applies updates from origin/main, especially when release tags reach v5+.
+    Automatically applies updates when a newer release or commit is found on main.
     """
     project_dir = Path(__file__).resolve().parent.parent
     if not (project_dir / ".git").exists():
         return
     try:
+        from .update import run_full_update
+        # Fast remote check
         res = subprocess.run(
-            ["timeout", "3", "git", "ls-remote", "--tags", "origin"],
+            ["timeout", "2", "git", "rev-list", "HEAD..origin/main", "--count"],
             cwd=str(project_dir),
             capture_output=True,
             text=True
         )
-        if res.returncode == 0 and res.stdout:
-            tags = [line.split("/")[-1] for line in res.stdout.splitlines() if "refs/tags/v" in line]
-            has_v5 = any(
-                t.lstrip("v").split(".")[0].isdigit() and int(t.lstrip("v").split(".")[0]) >= 5
-                for t in tags
-            )
-            if has_v5:
-                latest_tag = tags[-1]
-                console.print(f"[UPDATE] GitHub release {latest_tag} (v5+) detected. Applying update...")
-                subprocess.run(["git", "pull", "--quiet", "origin", "main"], cwd=str(project_dir), capture_output=True)
-                console.print(f"[OK] CPUGhost auto-updated to {latest_tag}.")
-                return
-
-        # Fallback to checking main branch HEAD commit
-        res_head = subprocess.run(
-            ["timeout", "3", "git", "ls-remote", "--heads", "origin", "main"],
-            cwd=str(project_dir),
-            capture_output=True,
-            text=True
-        )
-        if res_head.returncode == 0 and res_head.stdout:
-            remote_hash = res_head.stdout.strip().split()[0]
-            local_res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(project_dir), capture_output=True, text=True)
-            local_hash = local_res.stdout.strip() if local_res.returncode == 0 else ""
-            if remote_hash and local_hash and remote_hash != local_hash:
-                subprocess.run(["git", "pull", "--quiet", "origin", "main"], cwd=str(project_dir), capture_output=True)
-                console.print("[OK] CPUGhost auto-updated to latest commit.")
+        if res.returncode == 0 and int(res.stdout.strip() or 0) > 0:
+            console.print("[UPDATE] Newer release detected on GitHub. Applying update...")
+            run_full_update(force=False, check_only=False)
     except Exception:
         pass
 
@@ -988,64 +970,11 @@ def show_help():
 
 @main.command(name="update")
 @click.option("--check", is_flag=True, help="Only check for updates without applying")
-def update_cpughost(check: bool):
-    """Check for and apply updates from GitHub (pheonix14/cpughost)."""
-    project_dir = Path(__file__).resolve().parent.parent
-    git_dir = project_dir / ".git"
-
-    console.print("[UPDATE] Connecting to GitHub repository (pheonix14/cpughost)...")
-
-    if not git_dir.exists():
-        console.print("[WARN] CPUGhost is not installed as a git repository.")
-        console.print("[INFO] Re-cloning from https://github.com/pheonix14/cpughost.git recommended.")
-        return
-
-    try:
-        # 1. Fetch latest changes
-        subprocess.run(["git", "fetch", "origin", "main"], cwd=str(project_dir), check=True, capture_output=True)
-
-        # 2. Check commit difference
-        res = subprocess.run(
-            ["git", "rev-list", "HEAD..origin/main", "--count"],
-            cwd=str(project_dir),
-            capture_output=True,
-            text=True
-        )
-        behind_count = int(res.stdout.strip() or 0)
-
-        if behind_count == 0:
-            console.print("[OK] CPUGhost is already up to date with origin/main.")
-            return
-
-        console.print(f"[INFO] New update available: {behind_count} commit(s) behind GitHub.")
-
-        if check:
-            return
-
-        console.print("[UPDATE] Pulling latest updates from GitHub...")
-        subprocess.run(["git", "pull", "origin", "main"], cwd=str(project_dir), check=True, capture_output=True)
-
-        # 3. Update virtualenv dependencies
-        console.print("[UPDATE] Updating Python environment dependencies...")
-        venv_python = project_dir / ".venv" / "bin" / "python"
-        deps = "fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx"
-        if shutil.which("uv"):
-            subprocess.run(["uv", "pip", "install", "--python", str(venv_python)] + deps.split(), capture_output=True)
-        else:
-            pip_bin = project_dir / ".venv" / "bin" / "pip"
-            subprocess.run([str(pip_bin), "install", "-q"] + deps.split(), capture_output=True)
-
-        # 4. Re-link CLI binary
-        bin_source = project_dir / "bin" / "ghost"
-        bin_dest = Path.home() / ".local" / "bin" / "ghost"
-        if bin_source.exists():
-            bin_dest.parent.mkdir(parents=True, exist_ok=True)
-            bin_dest.unlink(missing_ok=True)
-            bin_dest.symlink_to(bin_source)
-
-        console.print("[OK] CPUGhost successfully updated to the latest version!")
-    except Exception as e:
-        console.print(f"[ERR] Failed to update from GitHub: {e}")
+@click.option("--force", "-f", is_flag=True, help="Force overwrite local changes and reinstall dependencies")
+def update_cpughost(check: bool, force: bool):
+    """High-power auto-update engine: fetch and apply latest releases from GitHub."""
+    from .update import run_full_update
+    run_full_update(force=force, check_only=check)
 
 
 @main.command(name="nopasswd")
