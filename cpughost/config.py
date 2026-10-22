@@ -6,6 +6,18 @@ from pathlib import Path
 CONFIG_DIR = Path.home() / ".config" / "cpughost"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+POINTER_COLORS = {
+    "zorin_cyan": {"name": "Zorin Cyan", "rgb": (0, 215, 230)},
+    "zorin_blue": {"name": "Zorin Blue", "rgb": (30, 144, 255)},
+    "zorin_green": {"name": "Zorin Green", "rgb": (46, 204, 113)},
+    "zorin_orange": {"name": "Zorin Orange", "rgb": (255, 128, 0)},
+    "zorin_red": {"name": "Zorin Red", "rgb": (255, 70, 70)},
+    "zorin_purple": {"name": "Zorin Purple", "rgb": (175, 85, 255)},
+    "neon_yellow": {"name": "Neon Yellow", "rgb": (255, 230, 0)},
+    "hot_pink": {"name": "Cyberpunk Pink", "rgb": (255, 75, 180)},
+    "white": {"name": "Classic White", "rgb": (255, 255, 255)},
+}
+
 DEFAULT_CONFIG = {
     "node_name": socket.gethostname(),
     "discovery_port": 8989,
@@ -19,7 +31,10 @@ DEFAULT_CONFIG = {
     "last_peer_ip": "",
     "auto_mount": True,
     "headless_display": ":0",
-    "screen_resolution": "1920x1080"
+    "screen_resolution": "1920x1080",
+    "pointer_color": "zorin_cyan",
+    "pointer_scale": 1.2,
+    "pointer_click_effect": True
 }
 
 

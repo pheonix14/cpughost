@@ -355,6 +355,60 @@ def screen(ip: Optional[str] = None):
     viewer.start()
 
 
+@main.command(name="pointer")
+@click.argument("color", required=False)
+@click.option("--size", "-s", type=float, help="Pointer scale (e.g. 1.0, 1.3, 1.7, 2.0)")
+@click.option("--list", "-l", "list_colors", is_flag=True, help="List available Zorin pointer colors")
+def pointer_cmd(color: Optional[str] = None, size: Optional[float] = None, list_colors: bool = False):
+    """Customize remote mouse pointer color and size for viewer."""
+    from .config import POINTER_COLORS
+    cfg = load_config()
+
+    if list_colors or (not color and size is None):
+        print_ascii_banner()
+        console.print("[bold green]AVAILABLE ZORIN POINTER COLORS[/bold green]")
+        console.print("------------------------------------------------------------------")
+        cur_color = cfg.get("pointer_color", "zorin_cyan")
+        cur_size = cfg.get("pointer_scale", 1.2)
+
+        table = Table(title="CPUGhost Pointer Themes")
+        table.add_column("Key", style="bold cyan")
+        table.add_column("Color Name", style="white")
+        table.add_column("RGB Preview", style="yellow")
+        table.add_column("Active", style="magenta")
+
+        for k, v in POINTER_COLORS.items():
+            is_active = "[ACTIVE]" if k == cur_color else ""
+            table.add_row(k, v["name"], str(v["rgb"]), is_active)
+
+        console.print(table)
+        console.print(f"[INFO] Current Size: {cur_size}x")
+        console.print("[INFO] Change color with: ghost pointer <color> (e.g. ghost pointer cyan)")
+        console.print("[INFO] In viewer window: press F6 (or C) to cycle colors, F7 (or P) to cycle sizes.")
+        return
+
+    if color:
+        color_lower = color.lower().replace("-", "_").replace(" ", "_")
+        matched_key = None
+        for k in POINTER_COLORS:
+            if k == color_lower or k == f"zorin_{color_lower}" or color_lower in k:
+                matched_key = k
+                break
+
+        if not matched_key:
+            console.print(f"[ERR] Unknown color '{color}'. Available: {', '.join(POINTER_COLORS.keys())}")
+            return
+
+        cfg["pointer_color"] = matched_key
+        console.print(f"[OK] Set pointer color to: {POINTER_COLORS[matched_key]['name']} ({matched_key})")
+
+    if size is not None:
+        cfg["pointer_scale"] = max(0.5, min(3.0, size))
+        console.print(f"[OK] Set pointer size to: {cfg['pointer_scale']}x")
+
+    save_config(cfg)
+
+
 @main.group()
 def drive():
     """Virtual Pen Drive file management."""

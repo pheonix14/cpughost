@@ -9,8 +9,10 @@ import threading
 import asyncio
 from typing import Optional, Tuple
 import pygame
+import pygame.gfxdraw
 import websockets
 from rich.console import Console
+from .config import load_config, save_config, POINTER_COLORS
 
 console = Console()
 
@@ -78,6 +80,31 @@ def calculate_letterbox(win_w: int, win_h: int, raw_w: int, raw_h: int) -> Tuple
     return render_w, render_h, offset_x, offset_y
 
 
+def make_cursor_surface(color_rgb: Tuple[int, int, int], scale: float = 1.2) -> pygame.Surface:
+    """Generate high-contrast anti-aliased Zorin-styled colored mouse pointer."""
+    w, h = max(16, int(28 * scale)), max(16, int(28 * scale))
+    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+
+    base_points = [(0, 0), (0, 19), (5, 14), (9, 23), (12, 21), (8, 13), (14, 13)]
+    pts = [(int(x * scale), int(y * scale)) for x, y in base_points]
+
+    # Semi-transparent drop-shadow
+    shadow_pts = [(x + 2, y + 2) for x, y in pts]
+    pygame.gfxdraw.filled_polygon(surf, shadow_pts, (0, 0, 0, 110))
+
+    # Outer border (dark contrast)
+    pygame.gfxdraw.filled_polygon(surf, pts, (10, 15, 20, 255))
+    pygame.gfxdraw.aapolygon(surf, pts, (10, 15, 20, 255))
+
+    # Inner vibrant accent-colored polygon
+    inner_base = [(1, 2), (1, 16), (5, 13), (8, 20), (10, 19), (7, 12), (12, 12)]
+    inner_pts = [(int(x * scale), int(y * scale)) for x, y in inner_base]
+    pygame.gfxdraw.filled_polygon(surf, inner_pts, (*color_rgb, 255))
+    pygame.gfxdraw.aapolygon(surf, inner_pts, (*color_rgb, 255))
+
+    return surf
+
+
 class GhostScreenViewer:
     def __init__(self, host_ip: str, port: int = 8889, initial_width: int = 1280, initial_height: int = 720):
         self.host_ip = host_ip
@@ -100,6 +127,61 @@ class GhostScreenViewer:
         self.connected = False
         self.black_screen_warning = False
         self.consecutive_black_frames = 0
+
+        # Mouse pointer configuration & Zorin color styles
+        cfg = load_config()
+        self.pointer_color_key = cfg.get("pointer_color", "zorin_cyan")
+        if self.pointer_color_key not in POINTER_COLORS:
+            self.pointer_color_key = "zorin_cyan"
+        self.pointer_scale = float(cfg.get("pointer_scale", 1.2))
+        self.pointer_click_effect = bool(cfg.get("pointer_click_effect", True))
+
+        self.pointer_keys = list(POINTER_COLORS.keys())
+        try:
+            self.pointer_idx = self.pointer_keys.index(self.pointer_color_key)
+        except ValueError:
+            self.pointer_idx = 0
+
+        self.cursor_surface = make_cursor_surface(
+            POINTER_COLORS[self.pointer_color_key]["rgb"], self.pointer_scale
+        )
+        self.cursor_pos: Optional[Tuple[int, int]] = None
+        self.cursor_visible: bool = False
+        self.click_ripples: List[dict] = []
+        self.toast_msg: Optional[str] = None
+        self.toast_until: float = 0.0
+
+    def cycle_pointer_color(self):
+        """Cycle through Zorin accent colors in real-time."""
+        self.pointer_idx = (self.pointer_idx + 1) % len(self.pointer_keys)
+        self.pointer_color_key = self.pointer_keys[self.pointer_idx]
+        color_info = POINTER_COLORS[self.pointer_color_key]
+        self.cursor_surface = make_cursor_surface(color_info["rgb"], self.pointer_scale)
+        cfg = load_config()
+        cfg["pointer_color"] = self.pointer_color_key
+        save_config(cfg)
+        self.show_toast(f"Pointer Color: {color_info['name']} (F6 / C to cycle)")
+
+    def cycle_pointer_size(self):
+        """Cycle through pointer sizes in real-time."""
+        scales = [1.0, 1.3, 1.7, 2.0]
+        try:
+            cur = round(self.pointer_scale, 1)
+            idx = scales.index(cur) if cur in scales else 0
+            self.pointer_scale = scales[(idx + 1) % len(scales)]
+        except Exception:
+            self.pointer_scale = 1.3
+
+        color_info = POINTER_COLORS[self.pointer_color_key]
+        self.cursor_surface = make_cursor_surface(color_info["rgb"], self.pointer_scale)
+        cfg = load_config()
+        cfg["pointer_scale"] = self.pointer_scale
+        save_config(cfg)
+        self.show_toast(f"Pointer Size: {self.pointer_scale}x (F7 / P to cycle)")
+
+    def show_toast(self, msg: str, duration: float = 2.0):
+        self.toast_msg = msg
+        self.toast_until = time.time() + duration
 
     def start(self):
         console.print(f"[SCREEN] Connecting viewer window to ws://{self.host_ip}:{self.port}...")
@@ -192,6 +274,16 @@ class GhostScreenViewer:
                         )
 
                 elif event.type == pygame.KEYDOWN:
+                    # F6 or (ungrabbed and K_c): cycle pointer color
+                    if event.key == pygame.K_F6 or (not self.input_grabbed and event.key == pygame.K_c):
+                        self.cycle_pointer_color()
+                        continue
+
+                    # F7 or (ungrabbed and K_p): cycle pointer size
+                    if event.key == pygame.K_F7 or (not self.input_grabbed and event.key == pygame.K_p):
+                        self.cycle_pointer_size()
+                        continue
+
                     # F11 Fullscreen toggle
                     if event.key == pygame.K_F11:
                         self.fullscreen = not self.fullscreen
@@ -236,20 +328,33 @@ class GhostScreenViewer:
                             self.event_queue.put({"type": "key_up", "key": key_name})
 
                 elif event.type == pygame.MOUSEMOTION:
+                    mx, my = event.pos
+                    inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
+                    self.cursor_pos = (mx, my)
+                    self.cursor_visible = inside
+
+                    # Hide default OS cursor when over remote desktop so our custom colored pointer is active
+                    pygame.mouse.set_visible(not inside)
+
                     if self.input_grabbed and render_w > 0 and render_h > 0:
-                        mx, my = event.pos
-                        inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
-
-                        # Hide local cursor when hovering inside the remote desktop to avoid double cursor
-                        pygame.mouse.set_visible(not inside)
-
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
+                    mx, my = event.pos
+                    inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
+                    self.cursor_pos = (mx, my)
+                    self.cursor_visible = inside
+
+                    # Click visual feedback ripple
+                    if self.pointer_click_effect and inside:
+                        c_rgb = POINTER_COLORS[self.pointer_color_key]["rgb"]
+                        self.click_ripples.append({
+                            "x": mx, "y": my, "radius": 4.0, "max_radius": 24.0, "alpha": 220, "color": c_rgb
+                        })
+
                     if self.input_grabbed and render_w > 0 and render_h > 0:
-                        mx, my = event.pos
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
@@ -329,6 +434,24 @@ class GhostScreenViewer:
                 screen.blit(title, (40, self.win_h // 2 - 25))
                 screen.blit(sub, (40, self.win_h // 2 + 5))
 
+            # Click ripple animations
+            if self.click_ripples:
+                ripple_surf = pygame.Surface((self.win_w, self.win_h), pygame.SRCALPHA)
+                active_ripples = []
+                for r in self.click_ripples:
+                    r["radius"] += 2.0
+                    r["alpha"] = max(0, r["alpha"] - 18)
+                    if r["alpha"] > 0 and r["radius"] <= r["max_radius"]:
+                        c = r["color"]
+                        pygame.gfxdraw.aacircle(ripple_surf, int(r["x"]), int(r["y"]), int(r["radius"]), (*c, int(r["alpha"])))
+                        active_ripples.append(r)
+                self.click_ripples = active_ripples
+                screen.blit(ripple_surf, (0, 0))
+
+            # Draw custom colored pointer
+            if self.cursor_visible and self.cursor_pos and self.cursor_surface:
+                screen.blit(self.cursor_surface, self.cursor_pos)
+
             # Black screen diagnosis alert
             if self.connected and self.black_screen_warning:
                 alert_box = pygame.Surface((min(self.win_w - 60, 800), 75), pygame.SRCALPHA)
@@ -344,8 +467,19 @@ class GhostScreenViewer:
                 alert_box.blit(t3, (12, 48))
                 screen.blit(alert_box, (30, 45))
 
+            # Toast banner (e.g. pointer color changed)
+            if self.toast_msg and time.time() < self.toast_until:
+                t_surf = font.render(f"[ {self.toast_msg} ]", True, (255, 255, 255))
+                t_bg = pygame.Surface((t_surf.get_width() + 24, t_surf.get_height() + 12), pygame.SRCALPHA)
+                t_bg.fill((20, 25, 35, 230))
+                c_accent = POINTER_COLORS[self.pointer_color_key]["rgb"]
+                pygame.draw.rect(t_bg, c_accent, t_bg.get_rect(), 2)
+                t_bg.blit(t_surf, (12, 6))
+                screen.blit(t_bg, ((self.win_w - t_bg.get_width()) // 2, 70))
+
             # HUD overlay
-            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Released (Ctrl+G)'} | F11 Fullscreen"
+            color_name = POINTER_COLORS[self.pointer_color_key]["name"]
+            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | Pointer: {color_name} (F6) | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Released (Ctrl+G)'} | F11"
             hud_surface = font.render(hud_text, True, (200, 200, 200))
             hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
             hud_bg.fill((0, 0, 0, 160))
