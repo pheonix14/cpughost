@@ -22,53 +22,124 @@ console = Console()
 KEY_MAPPING = {
     "super": Key.cmd,
     "Key.cmd": Key.cmd,
+    "Key.cmd_l": Key.cmd,
+    "Key.cmd_r": Key.cmd_r,
+    "left meta": Key.cmd,
+    "right meta": Key.cmd_r,
+    "left super": Key.cmd,
+    "right super": Key.cmd_r,
+    "meta": Key.cmd,
+    "windows": Key.cmd,
+    "win": Key.cmd,
     "ctrl": Key.ctrl,
     "Key.ctrl": Key.ctrl,
+    "left ctrl": Key.ctrl,
+    "right ctrl": Key.ctrl_r,
     "alt": Key.alt,
     "Key.alt": Key.alt,
+    "left alt": Key.alt,
+    "right alt": Key.alt_r,
     "shift": Key.shift,
     "Key.shift": Key.shift,
+    "left shift": Key.shift,
+    "right shift": Key.shift_r,
     "return": Key.enter,
+    "enter": Key.enter,
     "Key.enter": Key.enter,
     "backspace": Key.backspace,
     "Key.backspace": Key.backspace,
     "tab": Key.tab,
     "Key.tab": Key.tab,
     "esc": Key.esc,
+    "escape": Key.esc,
     "Key.esc": Key.esc,
+    "space": Key.space,
     "Key.space": Key.space,
+    "delete": Key.delete,
     "Key.delete": Key.delete,
+    "insert": Key.insert,
+    "Key.insert": Key.insert,
+    "up": Key.up,
     "Key.up": Key.up,
+    "down": Key.down,
     "Key.down": Key.down,
+    "left": Key.left,
     "Key.left": Key.left,
+    "right": Key.right,
     "Key.right": Key.right,
+    "home": Key.home,
+    "Key.home": Key.home,
+    "end": Key.end,
+    "Key.end": Key.end,
+    "page up": Key.page_up,
+    "page down": Key.page_down,
+    "caps lock": Key.caps_lock,
+    "caps_lock": Key.caps_lock,
+    "num lock": Key.num_lock,
+    "scroll lock": Key.scroll_lock,
 }
+for f in range(1, 13):
+    if hasattr(Key, f"f{f}"):
+        KEY_MAPPING[f"f{f}"] = getattr(Key, f"f{f}")
 KEY_MAP = KEY_MAPPING
 
 KEYSYM_MAP = {
     "super": 0xffeb,
     "Key.cmd": 0xffeb,
+    "Key.cmd_l": 0xffeb,
+    "Key.cmd_r": 0xffec,
+    "left meta": 0xffeb,
+    "right meta": 0xffec,
+    "left super": 0xffeb,
+    "right super": 0xffec,
+    "meta": 0xffeb,
+    "windows": 0xffeb,
+    "win": 0xffeb,
     "ctrl": 0xffe3,
     "Key.ctrl": 0xffe3,
+    "left ctrl": 0xffe3,
+    "right ctrl": 0xffe4,
     "alt": 0xffe9,
     "Key.alt": 0xffe9,
+    "left alt": 0xffe9,
+    "right alt": 0xffea,
     "shift": 0xffe1,
     "Key.shift": 0xffe1,
+    "left shift": 0xffe1,
+    "right shift": 0xffe2,
     "return": 0xff0d,
+    "enter": 0xff0d,
     "Key.enter": 0xff0d,
     "backspace": 0xff08,
     "Key.backspace": 0xff08,
     "tab": 0xff09,
     "Key.tab": 0xff09,
     "esc": 0xff1b,
+    "escape": 0xff1b,
     "Key.esc": 0xff1b,
+    "space": 0x0020,
     "Key.space": 0x0020,
+    "delete": 0xffff,
     "Key.delete": 0xffff,
+    "insert": 0xff63,
+    "Key.insert": 0xff63,
+    "home": 0xff50,
+    "Key.home": 0xff50,
+    "end": 0xff57,
+    "Key.end": 0xff57,
+    "page up": 0xff55,
+    "page down": 0xff56,
+    "up": 0xff52,
     "Key.up": 0xff52,
+    "down": 0xff54,
     "Key.down": 0xff54,
+    "left": 0xff51,
     "Key.left": 0xff51,
+    "right": 0xff53,
     "Key.right": 0xff53,
 }
+for f in range(1, 13):
+    KEYSYM_MAP[f"f{f}"] = 0xffbe + f - 1
 
 
 def ensure_xauthority():
@@ -372,6 +443,23 @@ class WaylandScreenCapture:
         except Exception:
             return False
 
+    def notify_keyboard_keycode(self, keycode: int, state: bool) -> bool:
+        if not self.bus or not self.rd_session_path:
+            return False
+        from gi.repository import GLib, Gio
+        try:
+            self.bus.call_sync(
+                "org.gnome.Mutter.RemoteDesktop",
+                self.rd_session_path,
+                "org.gnome.Mutter.RemoteDesktop.Session",
+                "NotifyKeyboardKeycode",
+                GLib.Variant("(ub)", (int(keycode), bool(state))),
+                None, Gio.DBusCallFlags.NONE, -1, None
+            )
+            return True
+        except Exception:
+            return False
+
     def close(self):
         self.active = False
         try:
@@ -556,13 +644,27 @@ class GhostScreenServer:
                 is_down = (event_type == "key_down")
                 handled = False
 
-                # 1. Try Wayland Mutter RemoteDesktop keysym
+                # 1. Try Wayland Mutter RemoteDesktop keysym / keycode
                 if self.wayland_cap and self.wayland_cap.active:
-                    keysym = KEYSYM_MAP.get(raw_key)
-                    if keysym is None and len(raw_key) == 1:
-                        keysym = ord(raw_key)
-                    if keysym is not None:
-                        handled = self.wayland_cap.notify_keyboard_keysym(keysym, is_down)
+                    # Special check: Super / Windows key handling (evdev 125, X11 133, keysym 0xffeb)
+                    if raw_key in (
+                        "super", "Key.cmd", "Key.cmd_l", "Key.cmd_r",
+                        "left meta", "right meta", "left super", "right super",
+                        "meta", "super_l", "super_r", "windows", "win"
+                    ):
+                        if hasattr(self.wayland_cap, "notify_keyboard_keycode"):
+                            handled = self.wayland_cap.notify_keyboard_keycode(133, is_down)
+                            if not handled:
+                                handled = self.wayland_cap.notify_keyboard_keycode(125, is_down)
+                        if not handled:
+                            handled = self.wayland_cap.notify_keyboard_keysym(0xffeb, is_down)
+
+                    if not handled:
+                        keysym = KEYSYM_MAP.get(raw_key)
+                        if keysym is None and len(raw_key) == 1:
+                            keysym = ord(raw_key)
+                        if keysym is not None:
+                            handled = self.wayland_cap.notify_keyboard_keysym(keysym, is_down)
 
                 # 2. Fallback to pynput
                 if not handled:
@@ -570,10 +672,13 @@ class GhostScreenServer:
                         self._init_input_controllers()
                     if self.keyboard:
                         k = KEY_MAP.get(raw_key, raw_key)
-                        if is_down:
-                            self.keyboard.press(k)
-                        else:
-                            self.keyboard.release(k)
+                        try:
+                            if is_down:
+                                self.keyboard.press(k)
+                            else:
+                                self.keyboard.release(k)
+                        except Exception:
+                            pass
 
         except Exception:
             pass

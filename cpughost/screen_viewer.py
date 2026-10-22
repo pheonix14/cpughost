@@ -43,6 +43,10 @@ PYGAME_KEY_MAP = {
     pygame.K_PAGEDOWN: "page down",
     pygame.K_INSERT: "insert",
 }
+if hasattr(pygame, "K_LGUI"):
+    PYGAME_KEY_MAP[pygame.K_LGUI] = "super"
+if hasattr(pygame, "K_RGUI"):
+    PYGAME_KEY_MAP[pygame.K_RGUI] = "super"
 
 
 def calculate_letterbox(
@@ -212,6 +216,26 @@ class GhostScreenViewer:
         self.toast_msg = msg
         self.toast_until = time.time() + duration
 
+    def _apply_grab_settings(self, grab_kb: bool = True):
+        """
+        Grab keyboard strictly for Zorin without ever trapping or locking the mouse cursor.
+        SDL2 Window grab_keyboard=True routes Super (Windows key) and shortcuts to Zorin.
+        SDL2 Window grab_mouse=False and pygame.event.set_grab(False) keep the mouse cursor free.
+        """
+        try:
+            import pygame._sdl2.video as sdl2_video
+            win = sdl2_video.Window.from_display_module()
+            if hasattr(win, "grab_keyboard"):
+                win.grab_keyboard = grab_kb
+            if hasattr(win, "grab_mouse"):
+                win.grab_mouse = False
+        except Exception:
+            pass
+        try:
+            pygame.event.set_grab(False)
+        except Exception:
+            pass
+
     def start(self):
         console.print(f"[SCREEN] Connecting viewer window to ws://{self.host_ip}:{self.port}...")
         self.running = True
@@ -314,15 +338,14 @@ class GhostScreenViewer:
 
     def _run_gui_loop(self):
         pygame.init()
-        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Normal Ratio | F8/F9 Zoom | F6 Color | F11 Fullscreen)")
+        title_focused = f"CPUGhost Monitor - [{self.host_ip}] [Zorin Keyboard Active | Mouse Free]"
+        title_unfocused = f"CPUGhost Monitor - [{self.host_ip}] (Click inside to capture keyboard)"
+        pygame.display.set_caption(title_focused)
         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         clock = pygame.time.Clock()
 
-        # NEVER trap or lock the mouse inside the window
-        try:
-            pygame.event.set_grab(False)
-        except Exception:
-            pass
+        # Keyboard routed exclusively to remote Zorin while keeping mouse cursor 100% free
+        self._apply_grab_settings(grab_kb=True)
 
         current_surface = None
         raw_w, raw_h = 1920, 1080
@@ -331,16 +354,37 @@ class GhostScreenViewer:
         )
         font = pygame.font.SysFont("monospace", 14)
 
+        focus_gained_ev = getattr(pygame, "WINDOWFOCUSGAINED", 32784)
+        focus_lost_ev = getattr(pygame, "WINDOWFOCUSLOST", 32785)
+
         while self.running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
                     break
 
+                elif event.type == focus_gained_ev:
+                    self._apply_grab_settings(grab_kb=True)
+                    pygame.display.set_caption(title_focused)
+
+                elif event.type == focus_lost_ev:
+                    self._apply_grab_settings(grab_kb=False)
+                    pygame.display.set_caption(title_unfocused)
+
+                elif event.type == pygame.ACTIVEEVENT:
+                    if hasattr(event, "gain"):
+                        if event.gain:
+                            self._apply_grab_settings(grab_kb=True)
+                            pygame.display.set_caption(title_focused)
+                        else:
+                            self._apply_grab_settings(grab_kb=False)
+                            pygame.display.set_caption(title_unfocused)
+
                 elif event.type == pygame.VIDEORESIZE:
                     if not self.fullscreen:
                         self.win_w, self.win_h = event.w, event.h
                         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
+                        self._apply_grab_settings(grab_kb=True)
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
                             self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
@@ -356,6 +400,7 @@ class GhostScreenViewer:
                         else:
                             screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
                             self.win_w, self.win_h = 1280, 720
+                        self._apply_grab_settings(grab_kb=True)
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
                             self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
@@ -413,6 +458,15 @@ class GhostScreenViewer:
                     if not key_name:
                         key_name = pygame.key.name(event.key)
 
+                    if key_name in ("left meta", "right meta", "left super", "right super", "meta", "windows", "win"):
+                        key_name = "super"
+                    elif key_name in ("left shift", "right shift"):
+                        key_name = "shift"
+                    elif key_name in ("left ctrl", "right ctrl"):
+                        key_name = "ctrl"
+                    elif key_name in ("left alt", "right alt"):
+                        key_name = "alt"
+
                     if key_name:
                         self.event_queue.put({"type": "key_down", "key": key_name})
 
@@ -420,6 +474,15 @@ class GhostScreenViewer:
                     key_name = PYGAME_KEY_MAP.get(event.key)
                     if not key_name:
                         key_name = pygame.key.name(event.key)
+
+                    if key_name in ("left meta", "right meta", "left super", "right super", "meta", "windows", "win"):
+                        key_name = "super"
+                    elif key_name in ("left shift", "right shift"):
+                        key_name = "shift"
+                    elif key_name in ("left ctrl", "right ctrl"):
+                        key_name = "ctrl"
+                    elif key_name in ("left alt", "right alt"):
+                        key_name = "alt"
 
                     if key_name:
                         self.event_queue.put({"type": "key_up", "key": key_name})
@@ -446,6 +509,10 @@ class GhostScreenViewer:
                     inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
+
+                    # Focus & grab keyboard for Zorin while leaving mouse completely free
+                    self._apply_grab_settings(grab_kb=True)
+                    pygame.display.set_caption(title_focused)
 
                     # Never lock mouse cursor inside the window
                     if inside and render_w > 0 and render_h > 0:
