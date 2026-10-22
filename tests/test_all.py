@@ -112,6 +112,15 @@ class TestCPUGhost(unittest.TestCase):
         for mod in ["ctrl", "alt", "shift", "return", "backspace", "tab", "esc"]:
             self.assertIn(mod, KEY_MAPPING)
 
+    def test_zoom_letterbox_scaling(self):
+        from cpughost.screen_viewer import calculate_letterbox
+        # Zoomed out to 90% (0.90) inside 1920x1080 window
+        rw, rh, ox, oy = calculate_letterbox(win_w=1920, win_h=1080, raw_w=1920, raw_h=1080, zoom=0.90)
+        self.assertEqual(rw, 1728)  # 1920 * 0.90
+        self.assertEqual(rh, 972)   # 1080 * 0.90
+        self.assertEqual(ox, 96)    # (1920 - 1728) // 2
+        self.assertEqual(oy, 54)    # (1080 - 972) // 2
+
     def test_passwordless_config_generators(self):
         import re
         user = "testuser"
