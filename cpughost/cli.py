@@ -296,6 +296,12 @@ def host(daemon: bool):
         console.print(f"[WARN] Host already running with PID {pid}. Run 'ghost stop' first.")
         return
 
+    if is_android():
+        print_ascii_banner()
+        from .phone_server import run_phone_host_service
+        run_phone_host_service()
+        return
+
     if daemon:
         # Launch daemonized process
         python_bin = sys.executable
@@ -477,6 +483,7 @@ def pointer_cmd(color: Optional[str] = None, size: Optional[float] = None, list_
 @click.option("--fps", "-f", default=60, type=int, help="Max framerate (default: 60)")
 @click.option("--off", is_flag=True, help="Turn physical phone screen off while mirroring on PC")
 @click.option("--no-audio", is_flag=True, help="Disable audio forwarding")
+@click.option("--serve", is_flag=True, help="Run phone screen and beacon server (for PC zero)")
 @click.option("--setup", "-s", is_flag=True, help="Interactive Phone Mirror Setup Wizard")
 def phone_cmd(
     ip: Optional[str] = None,
@@ -486,10 +493,16 @@ def phone_cmd(
     fps: int = 60,
     off: bool = False,
     no_audio: bool = False,
+    serve: bool = False,
     setup: bool = False
 ):
     """Mirror Android phone screen to PC zero with audio & touch/keyboard pass-through."""
     from .phone_mirror import launch_phone_mirror, interactive_phone_menu, pair_adb_wireless, detect_phone_ip
+
+    if serve:
+        from .phone_server import run_phone_host_service
+        run_phone_host_service()
+        return
 
     if setup:
         interactive_phone_menu()
