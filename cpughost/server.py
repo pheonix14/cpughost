@@ -36,7 +36,7 @@ def create_app(cfg: dict) -> FastAPI:
             "stream_port": cfg.get("stream_port", 8889),
             "audio_port": cfg.get("audio_port", 8890),
             "discovery_port": cfg.get("discovery_port", 8989),
-            "version": "1.0.3"
+            "version": "5.0.0"
         }
 
     @app.get("/api/ping")

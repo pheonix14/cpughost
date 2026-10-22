@@ -63,31 +63,45 @@ def notify_desktop(title: str, message: str):
 
 
 def check_and_apply_auto_update(silent: bool = True):
-    """Check GitHub for updates on boot with a strict 3-second timeout."""
+    """
+    Check GitHub for updates.
+    Applies updates from origin/main, especially when release tags reach v5+.
+    """
     project_dir = Path(__file__).resolve().parent.parent
     if not (project_dir / ".git").exists():
         return
     try:
-        if not silent:
-            console.print("[UPDATE] Checking GitHub for updates...")
         res = subprocess.run(
-            ["timeout", "3", "git", "ls-remote", "--heads", "origin", "main"],
+            ["timeout", "3", "git", "ls-remote", "--tags", "origin"],
             cwd=str(project_dir),
             capture_output=True,
             text=True
         )
         if res.returncode == 0 and res.stdout:
-            remote_hash = res.stdout.strip().split()[0]
-            local_res = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(project_dir),
-                capture_output=True,
-                text=True
+            tags = [line.split("/")[-1] for line in res.stdout.splitlines() if "refs/tags/v" in line]
+            has_v5 = any(
+                t.lstrip("v").split(".")[0].isdigit() and int(t.lstrip("v").split(".")[0]) >= 5
+                for t in tags
             )
-            local_hash = local_res.stdout.strip() if local_res.returncode == 0 else ""
+            if has_v5:
+                latest_tag = tags[-1]
+                console.print(f"[UPDATE] GitHub release {latest_tag} (v5+) detected. Applying update...")
+                subprocess.run(["git", "pull", "--quiet", "origin", "main"], cwd=str(project_dir), capture_output=True)
+                console.print(f"[OK] CPUGhost auto-updated to {latest_tag}.")
+                return
 
+        # Fallback to checking main branch HEAD commit
+        res_head = subprocess.run(
+            ["timeout", "3", "git", "ls-remote", "--heads", "origin", "main"],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True
+        )
+        if res_head.returncode == 0 and res_head.stdout:
+            remote_hash = res_head.stdout.strip().split()[0]
+            local_res = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(project_dir), capture_output=True, text=True)
+            local_hash = local_res.stdout.strip() if local_res.returncode == 0 else ""
             if remote_hash and local_hash and remote_hash != local_hash:
-                console.print(f"[UPDATE] New update detected on GitHub ({remote_hash[:7]}). Applying...")
                 subprocess.run(["git", "pull", "--quiet", "origin", "main"], cwd=str(project_dir), capture_output=True)
                 console.print("[OK] CPUGhost auto-updated to latest commit.")
     except Exception:
@@ -290,6 +304,16 @@ def host(daemon: bool):
         env = os.environ.copy()
         env["PYTHONPATH"] = f"{project_dir}:{env.get('PYTHONPATH', '')}"
         env["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+        if "DISPLAY" not in env:
+            env["DISPLAY"] = ":0"
+        if "XAUTHORITY" not in env:
+            uid = os.getuid()
+            run_dir = Path(f"/run/user/{uid}")
+            matches = list(run_dir.glob(".mutter-Xwaylandauth.*")) + list(run_dir.glob("*xauth*"))
+            if matches:
+                env["XAUTHORITY"] = str(matches[0])
+            elif (Path.home() / ".Xauthority").exists():
+                env["XAUTHORITY"] = str(Path.home() / ".Xauthority")
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         log_fp = open(CONFIG_DIR / "host.log", "w")
         cmd = [python_bin, "-m", "cpughost.server"]
