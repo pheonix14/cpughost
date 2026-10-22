@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CPUGHOST | Control Center</title>
+    <style>
+        :root {
+            --bg: #0a0c10;
+            --panel: #11151c;
+            --border: #232936;
+            --accent: #00ffaa;
+            --accent-dim: #00885b;
+            --text: #d8dee9;
+            --text-dim: #6c7891;
+            --danger: #ff5555;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'JetBrains Mono', 'Courier New', monospace;
+            padding: 20px;
+        }
+        header {
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 15px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        h1 {
+            color: var(--accent);
+            font-size: 1.5rem;
+            letter-spacing: 2px;
+        }
+        .status-badge {
+            background: #1b2720;
+            color: var(--accent);
+            border: 1px solid var(--accent-dim);
+            padding: 4px 12px;
+            border-radius: 3px;
+            font-size: 0.85rem;
+        }
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+        .card {
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 16px;
+        }
+        .card h2 {
+            font-size: 1.1rem;
+            color: var(--accent);
+            margin-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 8px;
+        }
+        .btn {
+            background: var(--border);
+            color: var(--text);
+            border: 1px solid #3b4252;
+            padding: 6px 14px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn:hover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        .btn-primary {
+            background: var(--accent-dim);
+            color: #000;
+            font-weight: bold;
+            border-color: var(--accent);
+        }
+        .btn-primary:hover {
+            background: var(--accent);
+            color: #000;
+        }
+        .file-list {
+            list-style: none;
+            margin-top: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .file-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            border-bottom: 1px solid #1a202c;
+            font-size: 0.9rem;
+        }
+        .file-item:hover {
+            background: #161b24;
+        }
+        .file-name {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .tag {
+            font-size: 0.75rem;
+            padding: 2px 6px;
+            background: #202633;
+            border-radius: 2px;
+            color: var(--text-dim);
+        }
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: 4px;
+            padding: 24px;
+            text-align: center;
+            color: var(--text-dim);
+            cursor: pointer;
+            margin-bottom: 12px;
+            transition: border-color 0.2s;
+        }
+        .drop-zone.dragover {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+        #screen-canvas {
+            width: 100%;
+            height: auto;
+            background: #000;
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            display: block;
+        }
+        .screen-info {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            font-size: 0.8rem;
+            color: var(--text-dim);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>[ CPUGHOST ]</h1>
+            <p style="font-size: 0.8rem; color: var(--text-dim); margin-top: 4px;">Headless Hotspot Control & Virtual Pen Drive</p>
+        </div>
+        <div class="status-badge" id="host-status">NODE: ONLINE</div>
+    </header>
+
+    <div class="grid">
+        <!-- Virtual Pen Drive Panel -->
+        <div class="card">
+            <h2>[ VIRTUAL PEN DRIVE ]</h2>
+            <div id="dropZone" class="drop-zone">
+                Drag and drop files here, or click to upload to Ghost Drive
+                <input type="file" id="fileInput" multiple style="display: none;">
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span id="driveCapacity" style="font-size: 0.8rem; color: var(--text-dim);">Loading storage...</span>
+                <button class="btn" onclick="refreshDrive()">Refresh</button>
+            </div>
+            <ul id="fileList" class="file-list"></ul>
+        </div>
+
+        <!-- Live Screen Preview Panel -->
+        <div class="card">
+            <h2>[ GHOST SCREEN MONITOR ]</h2>
+            <canvas id="screen-canvas"></canvas>
+            <div class="screen-info">
+                <span id="screenFps">Stream: Inactive</span>
+                <span>Type 'ghost screen' in terminal for Fullscreen & Native Controls</span>
+            </div>
+            <div style="margin-top: 12px; display: flex; gap: 8px;">
+                <button class="btn btn-primary" id="btnToggleScreen" onclick="toggleScreenStream()">Start Web Screen</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const fileList = document.getElementById('fileList');
+        const driveCapacity = document.getElementById('driveCapacity');
+
+        dropZone.onclick = () => fileInput.click();
+        fileInput.onchange = (e) => handleUpload(e.target.files);
+
+        dropZone.ondragover = (e) => { e.preventDefault(); dropZone.classList.add('dragover'); };
+        dropZone.ondragleave = () => dropZone.classList.remove('dragover');
+        dropZone.ondrop = (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleUpload(e.dataTransfer.files);
+        };
+
+        async function handleUpload(files) {
+            for (let f of files) {
+                let formData = new FormData();
+                formData.append('file', f);
+                formData.append('path', '');
+                await fetch('/api/drive/upload', { method: 'POST', body: formData });
+            }
+            refreshDrive();
+        }
+
+        async function refreshDrive() {
+            try {
+                let s = await fetch('/api/drive/status').then(r => r.json());
+                driveCapacity.innerText = `Storage: ${s.free_gb} GB Free / ${s.total_gb} GB Total`;
+
+                let res = await fetch('/api/drive/ls').then(r => r.json());
+                fileList.innerHTML = '';
+                if (!res.items || res.items.length === 0) {
+                    fileList.innerHTML = '<li class="file-item" style="color:var(--text-dim);">[Empty drive] Drop files to start transfer.</li>';
+                    return;
+                }
+                res.items.forEach(it => {
+                    let li = document.createElement('li');
+                    li.className = 'file-item';
+                    let typeTag = it.is_dir ? '[DIR]' : '[FILE]';
+                    let sizeStr = it.is_dir ? '-' : formatBytes(it.size);
+                    li.innerHTML = `
+                        <div class="file-name">
+                            <span class="tag">${typeTag}</span>
+                            <span>${it.name}</span>
+                        </div>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <span style="font-size:0.8rem; color:var(--text-dim);">${sizeStr}</span>
+                            ${!it.is_dir ? `<a class="btn" href="/api/drive/download?path=${encodeURIComponent(it.rel_path)}" download>Get</a>` : ''}
+                            <button class="btn" style="color:var(--danger);" onclick="deleteItem('${encodeURIComponent(it.rel_path)}')">Del</button>
+                        </div>
+                    `;
+                    fileList.appendChild(li);
+                });
+            } catch(e) {
+                driveCapacity.innerText = 'Unable to connect to drive storage';
+            }
+        }
+
+        async function deleteItem(path) {
+            if (confirm('Delete this item?')) {
+                let fd = new FormData();
+                fd.append('path', decodeURIComponent(path));
+                await fetch('/api/drive/delete', { method: 'POST', body: fd });
+                refreshDrive();
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            let k = 1024, sizes = ['B', 'KB', 'MB', 'GB'];
+            let i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Screen WebSocket Preview
+        let screenWs = null;
+        const canvas = document.getElementById('screen-canvas');
+        const ctx = canvas.getContext('2d');
+        const btnToggleScreen = document.getElementById('btnToggleScreen');
+        const screenFps = document.getElementById('screenFps');
+
+        function toggleScreenStream() {
+            if (screenWs) {
+                screenWs.close();
+                screenWs = null;
+                btnToggleScreen.innerText = 'Start Web Screen';
+                screenFps.innerText = 'Stream: Inactive';
+            } else {
+                startScreenStream();
+            }
+        }
+
+        function startScreenStream() {
+            let host = window.location.hostname || '127.0.0.1';
+            screenWs = new WebSocket(`ws://${host}:8889`);
+            screenWs.binaryType = 'blob';
+
+            btnToggleScreen.innerText = 'Stop Web Screen';
+            screenFps.innerText = 'Connecting...';
+
+            screenWs.onmessage = async (event) => {
+                let blob = event.data;
+                let img = new Image();
+                img.onload = () => {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    screenFps.innerText = `Stream Active (${img.width}x${img.height})`;
+                    URL.revokeObjectURL(img.src);
+                };
+                img.src = URL.createObjectURL(blob);
+            };
+
+            screenWs.onclose = () => {
+                screenWs = null;
+                btnToggleScreen.innerText = 'Start Web Screen';
+                screenFps.innerText = 'Stream: Disconnected';
+            };
+        }
+
+        refreshDrive();
+    </script>
+</body>
+</html>

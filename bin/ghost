@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# ==============================================================================
+# CPUGhost Universal CLI Launcher
+# ==============================================================================
+
+PROJECT_DIR="/home/zero/Desktop/cpughost"
+VENV_PYTHON="${PROJECT_DIR}/.venv/bin/python"
+
+if [ ! -f "$VENV_PYTHON" ]; then
+    echo "[ERR] Virtual environment not found at ${VENV_PYTHON}"
+    echo "[INFO] Re-initializing environment..."
+    uv venv "${PROJECT_DIR}/.venv"
+    uv pip install --python "${VENV_PYTHON}" fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce
+fi
+
+export PYGAME_HIDE_SUPPORT_PROMPT="1"
+export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
+exec "$VENV_PYTHON" -m cpughost.cli "$@"

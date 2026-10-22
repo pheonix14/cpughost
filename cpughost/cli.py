@@ -1,0 +1,394 @@
+import os
+os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+import sys
+import time
+import signal
+import subprocess
+from pathlib import Path
+from typing import Optional
+import click
+from rich.console import Console
+from rich.table import Table
+from rich.panel import Panel
+
+from .config import load_config, save_config, get_local_ip, CONFIG_DIR
+from .discovery import GhostDiscovery, scan_hotspot_subnet
+from .drive_client import GhostDriveClient
+from .screen_viewer import GhostScreenViewer
+from .server import run_host
+
+console = Console()
+PID_FILE = CONFIG_DIR / "host.pid"
+
+
+def get_stored_pid() -> Optional[int]:
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text().strip())
+            # Check if running
+            os.kill(pid, 0)
+            return pid
+        except (ValueError, OSError):
+            if PID_FILE.exists():
+                PID_FILE.unlink()
+    return None
+
+
+def print_ascii_banner():
+    banner = r"""
+==================================================================
+   ____ ____  _   _  ____ _   _  ___  ____ _____ 
+  / ___|  _ \| | | |/ ___| | | |/ _ \/ ___|_   _|
+ | |   | |_) | | | | |  _| |_| | | | \___ \ | |  
+ | |___|  __/| |_| | |_| |  _  | |_| |___) || |  
+  \____|_|    \___/ \____|_| |_|\___/|____/ |_|  
+==================================================================
+   HEADLESS DUAL-PC HOTSPOT SCREEN & VIRTUAL PEN DRIVE SYSTEM
+=================================================================="""
+    console.print(f"[bold cyan]{banner}[/bold cyan]")
+
+
+def resolve_host_ip(ip_arg: Optional[str]) -> Optional[str]:
+    """Resolve host IP via argument, discovery beacon, or subnet scan."""
+    if ip_arg:
+        return ip_arg
+
+    cfg = load_config()
+    last_ip = cfg.get("last_peer_ip")
+
+    console.print("[DISCOVERY] Scanning hotspot for CPUGhost host beacon...")
+    disc = GhostDiscovery(port=cfg.get("discovery_port", 8989))
+    disc.start_listener()
+    host_info = disc.find_host(timeout=2.0)
+    disc.stop()
+
+    if host_info:
+        host_ip = host_info["ip"]
+        console.print(f"[OK] Discovered CPUGhost Host at: {host_ip}")
+        cfg["last_peer_ip"] = host_ip
+        save_config(cfg)
+        return host_ip
+
+    # Fallback to active subnet scan
+    console.print("[DISCOVERY] No beacon received, probing local subnet...")
+    active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888))
+    if active_ips:
+        host_ip = active_ips[0]
+        console.print(f"[OK] Found CPUGhost node via subnet scan: {host_ip}")
+        cfg["last_peer_ip"] = host_ip
+        save_config(cfg)
+        return host_ip
+
+    if last_ip:
+        console.print(f"[WARN] No peer discovered. Using last known IP: {last_ip}")
+        return last_ip
+
+    console.print("[ERR] Could not locate CPUGhost Host on hotspot network.")
+    console.print("[INFO] Start the host on the second PC with: ghost host")
+    console.print("[INFO] Or specify host IP directly: ghost client <IP>")
+    return None
+
+
+@click.group(invoke_without_command=True)
+@click.pass_context
+def main(ctx):
+    """CPUGhost: Dual-PC Hotspot Screen & Virtual Drive CLI."""
+    if ctx.invoked_subcommand is None:
+        interactive_menu()
+
+
+@main.command()
+@click.option("--daemon", "-d", is_flag=True, help="Run host daemon in background")
+def host(daemon: bool):
+    """Start host server (Screen sharing + Virtual Pen Drive)."""
+    pid = get_stored_pid()
+    if pid:
+        console.print(f"[WARN] Host already running with PID {pid}. Run 'ghost stop' first.")
+        return
+
+    if daemon:
+        # Launch daemonized process
+        python_bin = sys.executable
+        project_dir = str(Path(__file__).resolve().parent.parent)
+        env = os.environ.copy()
+        env["PYTHONPATH"] = f"{project_dir}:{env.get('PYTHONPATH', '')}"
+        env["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        log_fp = open(CONFIG_DIR / "host.log", "w")
+        cmd = [python_bin, "-m", "cpughost.server"]
+        p = subprocess.Popen(
+            cmd,
+            cwd=project_dir,
+            env=env,
+            stdout=log_fp,
+            stderr=log_fp,
+            preexec_fn=os.setpgrp
+        )
+        PID_FILE.write_text(str(p.pid))
+        console.print(f"[OK] CPUGhost Host started in background (PID: {p.pid})")
+        console.print(f"[INFO] Control Center: http://{get_local_ip()}:8888")
+        console.print("[INFO] Stop host at any time with: ghost stop")
+    else:
+        print_ascii_banner()
+        run_host()
+
+
+@main.command()
+@click.argument("ip", required=False)
+def client(ip: Optional[str] = None):
+    """Connect to ghost host: mount pen drive and launch screen window."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+
+    cfg = load_config()
+    mount_dir = Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
+    mount_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"[DRIVE] Syncing virtual pen drive at: {mount_dir}")
+    client_driver = GhostDriveClient(host_ip, port=cfg.get("api_port", 8888))
+    client_driver.sync_once(mount_dir)
+    console.print(f"[OK] Pen drive synchronized: {mount_dir}")
+
+    console.print(f"[SCREEN] Opening remote screen viewer for {host_ip}...")
+    viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
+    viewer.start()
+
+
+@main.command()
+@click.argument("ip", required=False)
+def screen(ip: Optional[str] = None):
+    """Open remote screen viewer window only."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+
+    cfg = load_config()
+    console.print(f"[SCREEN] Launching screen viewer window -> {host_ip}")
+    viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
+    viewer.start()
+
+
+@main.group()
+def drive():
+    """Virtual Pen Drive file management."""
+    pass
+
+
+@drive.command(name="ls")
+@click.argument("path", default="")
+@click.option("--ip", default=None, help="Ghost Host IP")
+def drive_ls(path: str, ip: Optional[str]):
+    """List files on the ghost drive."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+    client = GhostDriveClient(host_ip)
+    client.print_ls(path)
+
+
+@drive.command(name="push")
+@click.argument("local_file")
+@click.argument("remote_path", default="")
+@click.option("--ip", default=None, help="Ghost Host IP")
+def drive_push(local_file: str, remote_path: str, ip: Optional[str]):
+    """Push local file or folder to the ghost drive."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+    client = GhostDriveClient(host_ip)
+    client.push(local_file, remote_path)
+
+
+@drive.command(name="pull")
+@click.argument("remote_file")
+@click.argument("local_dest", default="")
+@click.option("--ip", default=None, help="Ghost Host IP")
+def drive_pull(remote_file: str, local_dest: str, ip: Optional[str]):
+    """Pull file from ghost drive to local folder."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+    client = GhostDriveClient(host_ip)
+    client.pull(remote_file, local_dest)
+
+
+@drive.command(name="sync")
+@click.argument("local_dir", required=False)
+@click.option("--ip", default=None, help="Ghost Host IP")
+def drive_sync(local_dir: Optional[str], ip: Optional[str]):
+    """Mirror ghost drive to local folder."""
+    host_ip = resolve_host_ip(ip)
+    if not host_ip:
+        return
+    cfg = load_config()
+    target_dir = Path(local_dir) if local_dir else Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
+    client = GhostDriveClient(host_ip)
+    console.print(f"[DRIVE] Syncing {host_ip} <-> {target_dir}...")
+    client.sync_once(target_dir)
+    console.print("[OK] Synchronization completed.")
+
+
+@main.command()
+@click.option("--all", "-a", "include_self", is_flag=True, help="Include local node in scan results")
+def scan(include_self: bool):
+    """Scan hotspot network for CPUGhost nodes."""
+    print_ascii_banner()
+    cfg = load_config()
+    local_ip = get_local_ip()
+    console.print(f"[SCAN] Local Hotspot IP: {local_ip}")
+    console.print("[SCAN] Listening for UDP discovery beacons...")
+
+    disc = GhostDiscovery(port=cfg.get("discovery_port", 8989), include_self=include_self)
+    disc.start_listener()
+    time.sleep(2.0)
+    peers = disc.get_active_peers()
+    disc.stop()
+
+    table = Table(title="Discovered CPUGhost Nodes")
+    table.add_column("Node IP", style="cyan")
+    table.add_column("Name", style="bold white")
+    table.add_column("API Port", style="green")
+    table.add_column("Stream Port", style="yellow")
+    table.add_column("Roles", style="magenta")
+
+    for p in peers:
+        table.add_row(
+            p["ip"],
+            p["node_name"],
+            str(p["api_port"]),
+            str(p["stream_port"]),
+            ", ".join(p.get("roles", []))
+        )
+
+    if peers:
+        console.print(table)
+    else:
+        console.print("[INFO] No broadcast beacons received. Probing active TCP ports on subnet...")
+        active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888), include_self=include_self)
+        if active_ips:
+            for ip in active_ips:
+                table.add_row(ip, "Detected Node", str(cfg.get("api_port", 8888)), str(cfg.get("stream_port", 8889)), "host")
+            console.print(table)
+        else:
+            console.print("[WARN] No CPUGhost nodes found on this hotspot subnet.")
+
+
+@main.command()
+def status():
+    """Show CPUGhost service status and active configuration."""
+    print_ascii_banner()
+    cfg = load_config()
+    local_ip = get_local_ip()
+    pid = get_stored_pid()
+
+    status_str = f"[bold green]RUNNING (PID: {pid})[/bold green]" if pid else "[bold yellow]STANDBY / IDLE[/bold yellow]"
+
+    table = Table(title="System & Network Status")
+    table.add_column("Parameter", style="cyan")
+    table.add_column("Value", style="bold white")
+
+    table.add_row("Host Daemon", status_str)
+    table.add_row("Local IP", local_ip)
+    table.add_row("API / Web Port", str(cfg.get("api_port", 8888)))
+    table.add_row("Screen Stream Port", str(cfg.get("stream_port", 8889)))
+    table.add_row("Hotspot Discovery Port", str(cfg.get("discovery_port", 8989)))
+    table.add_row("Storage Path", cfg.get("storage_dir", ""))
+    table.add_row("Pen Drive Mount Path", cfg.get("mount_point", ""))
+    table.add_row("Last Connected Peer", cfg.get("last_peer_ip") or "None")
+
+    console.print(table)
+
+
+@main.command()
+def stop():
+    """Stop running CPUGhost background services."""
+    pid = get_stored_pid()
+    if not pid:
+        console.print("[INFO] No background CPUGhost host running.")
+        return
+
+    try:
+        os.kill(pid, signal.SIGTERM)
+        console.print(f"[OK] Terminated CPUGhost Host (PID: {pid})")
+    except OSError as e:
+        console.print(f"[WARN] Failed to terminate PID {pid}: {e}")
+    finally:
+        if PID_FILE.exists():
+            PID_FILE.unlink()
+
+
+def interactive_menu():
+    """Interactive ASCII Dashboard."""
+    while True:
+        print_ascii_banner()
+        cfg = load_config()
+        local_ip = get_local_ip()
+        pid = get_stored_pid()
+        status_text = f"RUNNING [PID: {pid}]" if pid else "STANDBY"
+
+        console.print(f" Local IP: [bold green]{local_ip}[/bold green] | Daemon: [bold yellow]{status_text}[/bold yellow] | Last Peer: [bold cyan]{cfg.get('last_peer_ip') or 'None'}[/bold cyan]")
+        console.print("------------------------------------------------------------------")
+        console.print(" [1] Start Host Mode (Headless Server: Screen + Pen Drive)")
+        console.print(" [2] Start Host in Background (Daemon)")
+        console.print(" [3] Connect as Client (Open Screen Window + Mount Pen Drive)")
+        console.print(" [4] Open Screen Viewer Window Only")
+        console.print(" [5] Virtual Pen Drive (Browse / Push / Pull)")
+        console.print(" [6] Scan Hotspot Network for Peers")
+        console.print(" [7] Stop Background Host")
+        console.print(" [8] System Status & Settings")
+        console.print(" [0] Exit")
+        console.print("------------------------------------------------------------------")
+
+        choice = click.prompt(" Select option", type=str, default="0")
+        if choice == "1":
+            run_host()
+        elif choice == "2":
+            ctx = click.get_current_context()
+            ctx.invoke(host, daemon=True)
+            time.sleep(1)
+        elif choice == "3":
+            ctx = click.get_current_context()
+            ctx.invoke(client)
+        elif choice == "4":
+            ctx = click.get_current_context()
+            ctx.invoke(screen)
+        elif choice == "5":
+            sub = click.prompt(" Drive action [ls|push|pull|sync]", default="ls")
+            if sub == "ls":
+                ctx = click.get_current_context()
+                ctx.invoke(drive_ls, path="")
+            elif sub == "push":
+                f = click.prompt(" Local file path")
+                ctx = click.get_current_context()
+                ctx.invoke(drive_push, local_file=f, remote_path="")
+            elif sub == "pull":
+                f = click.prompt(" Remote file name")
+                ctx = click.get_current_context()
+                ctx.invoke(drive_pull, remote_file=f, local_dest="")
+            elif sub == "sync":
+                ctx = click.get_current_context()
+                ctx.invoke(drive_sync, local_dir=None)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "6":
+            ctx = click.get_current_context()
+            ctx.invoke(scan)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "7":
+            ctx = click.get_current_context()
+            ctx.invoke(stop)
+            time.sleep(0.5)
+        elif choice == "8":
+            ctx = click.get_current_context()
+            ctx.invoke(status)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "0":
+            console.print("[INFO] Exiting CPUGhost.")
+            break
+        else:
+            console.print("[WARN] Invalid option.")
+            time.sleep(1)
+
+
+if __name__ == "__main__":
+    main()
