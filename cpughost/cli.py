@@ -5,6 +5,7 @@ import time
 import shutil
 import signal
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 import click
@@ -355,10 +356,16 @@ def client(ip: Optional[str] = None, wait: bool = False):
     mount_dir = Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
     mount_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"[DRIVE] Syncing virtual pen drive at: {mount_dir}")
-    client_driver = GhostDriveClient(host_ip, port=cfg.get("api_port", 8888))
-    client_driver.sync_once(mount_dir)
-    console.print(f"[OK] Pen drive synchronized: {mount_dir}")
+    def _sync_drive_bg():
+        try:
+            console.print(f"[DRIVE] Syncing virtual pen drive in background at: {mount_dir}")
+            client_driver = GhostDriveClient(host_ip, port=cfg.get("api_port", 8888))
+            client_driver.sync_once(mount_dir)
+            console.print(f"[OK] Pen drive synchronized: {mount_dir}")
+        except Exception:
+            pass
+
+    threading.Thread(target=_sync_drive_bg, daemon=True).start()
 
     console.print(f"[SCREEN] Opening remote screen viewer for {host_ip}...")
     viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
