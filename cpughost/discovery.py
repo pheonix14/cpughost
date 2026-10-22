@@ -5,7 +5,7 @@ import threading
 from typing import Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor
 
-from .config import load_config, get_local_ip, get_broadcast_ip
+from .config import load_config, get_local_ip, get_broadcast_ip, get_arp_neighbors
 
 BEACON_MAGIC = "CPUGHOST_BEACON_V1"
 
@@ -21,9 +21,12 @@ class GhostDiscovery:
         self._broadcaster_thread: Optional[threading.Thread] = None
 
     def start_broadcaster(self, roles: List[str] = None):
-        """Broadcast presence beacon on the hotspot network."""
+        """
+        Broadcast presence beacon on the hotspot network.
+        Sends via broadcast and direct unicast to active neighbors to bypass AP isolation.
+        """
         if roles is None:
-            roles = ["host", "drive", "screen"]
+            roles = ["host", "drive", "screen", "audio"]
 
         self.running = True
 
@@ -45,19 +48,39 @@ class GhostDiscovery:
                         "node_ip": local_ip,
                         "api_port": cfg.get("api_port", 8888),
                         "stream_port": cfg.get("stream_port", 8889),
+                        "audio_port": cfg.get("audio_port", 8890),
                         "roles": roles,
                         "time": time.time()
                     }
                     data = json.dumps(payload).encode("utf-8")
-                    sock.sendto(data, (bcast_ip, self.port))
-                    # Also broadcast to global broadcast as secondary
+
+                    # 1. Subnet broadcast
+                    try:
+                        sock.sendto(data, (bcast_ip, self.port))
+                    except Exception:
+                        pass
+
+                    # 2. Global broadcast as secondary
                     try:
                         sock.sendto(data, ("255.255.255.255", self.port))
                     except Exception:
                         pass
+
+                    # 3. Direct unicast to active ARP neighbors to guarantee discovery over AP isolation
+                    targets = set(get_arp_neighbors())
+                    last_peer = cfg.get("last_peer_ip")
+                    if last_peer and last_peer != local_ip and not last_peer.startswith("127."):
+                        targets.add(last_peer)
+
+                    for target_ip in targets:
+                        try:
+                            sock.sendto(data, (target_ip, self.port))
+                        except Exception:
+                            pass
+
                 except Exception:
                     pass
-                time.sleep(1.5)
+                time.sleep(1.2)
 
             sock.close()
 
@@ -78,7 +101,7 @@ class GhostDiscovery:
 
             try:
                 sock.bind(("", self.port))
-            except Exception as e:
+            except Exception:
                 # If cannot bind, listener is disabled
                 return
 
@@ -90,7 +113,11 @@ class GhostDiscovery:
                     data, addr = sock.recvfrom(4096)
                     info = json.loads(data.decode("utf-8"))
                     if info.get("magic") == BEACON_MAGIC:
-                        sender_ip = info.get("node_ip", addr[0])
+                        sender_ip = info.get("node_ip")
+                        # Fallback to physical socket source if reported IP was loopback or empty
+                        if not sender_ip or sender_ip.startswith("127."):
+                            sender_ip = addr[0]
+
                         # Ignore self unless include_self is True
                         if self.include_self or sender_ip != local_ip:
                             with self.lock:

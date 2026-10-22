@@ -6,6 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
+export PATH="${BIN_DIR}:${HOME}/.cargo/bin:${PATH}"
 
 echo "=================================================================="
 echo "   ____ ____  _   _  ____ _   _  ___  ____ _____ "
@@ -82,7 +83,7 @@ if ! command -v python3 >/dev/null 2>&1; then
     uv venv "${VENV_DIR}" --python 3.12
 elif command -v uv >/dev/null 2>&1; then
     echo "[INFO] Creating virtual environment using uv..."
-    uv venv "${VENV_DIR}"
+    uv venv "${VENV_DIR}" --allow-existing
 else
     echo "[INFO] Creating virtual environment using python3 venv..."
     if ! python3 -m venv "${VENV_DIR}" 2>/dev/null; then
@@ -148,7 +149,7 @@ fi
 
 if [ "$ROLE_CHOICE" = "1" ]; then
     echo "[INFO] Configuring as Headless Host..."
-    "${BIN_DIR}/ghost" autostart enable
+    "${BIN_DIR}/ghost" autostart enable --host
     "${VENV_DIR}/bin/python" -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'host'; save_config(c)" 2>/dev/null || true
     echo "[OK] CPUGhost Host autostart enabled."
 else

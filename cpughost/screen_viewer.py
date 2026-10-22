@@ -1,13 +1,11 @@
 import os
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 import io
-import sys
-import json
 import time
+import json
 import queue
 import threading
 import asyncio
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import pygame
 import pygame.gfxdraw
 import websockets
@@ -16,12 +14,17 @@ from .config import load_config, save_config, POINTER_COLORS
 
 console = Console()
 
-# Pygame key to string mapping for remote injection
 PYGAME_KEY_MAP = {
+    pygame.K_SPACE: "Key.space",
     pygame.K_RETURN: "return",
-    pygame.K_BACKSPACE: "backspace",
     pygame.K_TAB: "tab",
-    pygame.K_SPACE: "space",
+    pygame.K_BACKSPACE: "backspace",
+    pygame.K_DELETE: "Key.delete",
+    pygame.K_ESCAPE: "esc",
+    pygame.K_UP: "Key.up",
+    pygame.K_DOWN: "Key.down",
+    pygame.K_LEFT: "Key.left",
+    pygame.K_RIGHT: "Key.right",
     pygame.K_LSHIFT: "shift",
     pygame.K_RSHIFT: "shift",
     pygame.K_LCTRL: "ctrl",
@@ -30,51 +33,21 @@ PYGAME_KEY_MAP = {
     pygame.K_RALT: "alt",
     pygame.K_LSUPER: "super",
     pygame.K_RSUPER: "super",
-    pygame.K_MENU: "menu",
-    pygame.K_PRINT: "print_screen",
-    pygame.K_INSERT: "insert",
-    pygame.K_PAUSE: "pause",
-    pygame.K_NUMLOCK: "num_lock",
-    pygame.K_SCROLLOCK: "scroll_lock",
-    pygame.K_ESCAPE: "esc",
-    pygame.K_UP: "up",
-    pygame.K_DOWN: "down",
-    pygame.K_LEFT: "left",
-    pygame.K_RIGHT: "right",
-    pygame.K_DELETE: "delete",
-    pygame.K_HOME: "home",
-    pygame.K_END: "end",
-    pygame.K_PAGEUP: "page_up",
-    pygame.K_PAGEDOWN: "page_down",
-    pygame.K_CAPSLOCK: "caps_lock",
-    pygame.K_F1: "f1", pygame.K_F2: "f2", pygame.K_F3: "f3", pygame.K_F4: "f4",
-    pygame.K_F5: "f5", pygame.K_F6: "f6", pygame.K_F7: "f7", pygame.K_F8: "f8",
-    pygame.K_F9: "f9", pygame.K_F10: "f10", pygame.K_F11: "f11", pygame.K_F12: "f12",
-    pygame.K_KP0: "kp_0", pygame.K_KP1: "kp_1", pygame.K_KP2: "kp_2",
-    pygame.K_KP3: "kp_3", pygame.K_KP4: "kp_4", pygame.K_KP5: "kp_5",
-    pygame.K_KP6: "kp_6", pygame.K_KP7: "kp_7", pygame.K_KP8: "kp_8",
-    pygame.K_KP9: "kp_9", pygame.K_KP_ENTER: "enter",
-    pygame.K_KP_PLUS: "+", pygame.K_KP_MINUS: "-",
-    pygame.K_KP_MULTIPLY: "*", pygame.K_KP_DIVIDE: "/",
-    pygame.K_KP_PERIOD: "."
+    pygame.K_LMETA: "super",
+    pygame.K_RMETA: "super",
 }
 
 
-def calculate_letterbox(win_w: int, win_h: int, raw_w: int, raw_h: int) -> Tuple[int, int, int, int]:
-    """Calculate scaled dimensions and centered offsets to preserve aspect ratio."""
-    if win_w <= 0 or win_h <= 0 or raw_w <= 0 or raw_h <= 0:
+def calculate_letterbox(win_w: int, win_h: int, frame_w: int = 1920, frame_h: int = 1080, raw_w: Optional[int] = None, raw_h: Optional[int] = None) -> Tuple[int, int, int, int]:
+    """Calculate scaled dimensions and offsets to preserve aspect ratio within window."""
+    fw = raw_w if raw_w is not None else frame_w
+    fh = raw_h if raw_h is not None else frame_h
+    if fw <= 0 or fh <= 0 or win_w <= 0 or win_h <= 0:
         return win_w, win_h, 0, 0
 
-    aspect = raw_w / raw_h
-    win_aspect = win_w / win_h
-
-    if win_aspect > aspect:
-        render_h = win_h
-        render_w = int(render_h * aspect)
-    else:
-        render_w = win_w
-        render_h = int(render_w / aspect)
-
+    scale = min(win_w / fw, win_h / fh)
+    render_w = max(1, int(fw * scale))
+    render_h = max(1, int(fh * scale))
     offset_x = (win_w - render_w) // 2
     offset_y = (win_h - render_h) // 2
     return render_w, render_h, offset_x, offset_y
@@ -106,18 +79,20 @@ def make_cursor_surface(color_rgb: Tuple[int, int, int], scale: float = 1.2) -> 
 
 
 class GhostScreenViewer:
-    def __init__(self, host_ip: str, port: int = 8889, initial_width: int = 1280, initial_height: int = 720):
+    def __init__(self, host_ip: str, port: int = 8889, audio_port: int = 8890, initial_width: int = 1280, initial_height: int = 720):
         self.host_ip = host_ip
         self.port = port
+        self.audio_port = audio_port
         self.uri = f"ws://{host_ip}:{port}"
+        self.audio_uri = f"ws://{host_ip}:{audio_port}"
         self.win_w = initial_width
         self.win_h = initial_height
         self.fullscreen = False
-        self.input_grabbed = True
         self.running = False
+        self.input_grabbed = False
+        self.mouse_pressed = False
 
-        # Zero-lag frame queue: size 1 drops stale frames immediately
-        self.frame_queue = queue.Queue(maxsize=1)
+        self.frame_queue = queue.Queue(maxsize=3)
         self.event_queue = queue.Queue()
         self.pending_mouse_pos: Optional[Tuple[float, float]] = None
 
@@ -125,8 +100,6 @@ class GhostScreenViewer:
         self.fps = 0
         self.frame_count = 0
         self.connected = False
-        self.black_screen_warning = False
-        self.consecutive_black_frames = 0
 
         # Mouse pointer configuration & Zorin color styles
         cfg = load_config()
@@ -190,7 +163,42 @@ class GhostScreenViewer:
         net_thread = threading.Thread(target=self._run_network_loop, daemon=True)
         net_thread.start()
 
+        audio_thread = threading.Thread(target=self._run_audio_loop, daemon=True)
+        audio_thread.start()
+
         self._run_gui_loop()
+
+    def _run_audio_loop(self):
+        asyncio.run(self._audio_client())
+
+    async def _audio_client(self):
+        try:
+            import pygame.mixer
+            if not pygame.mixer.get_init():
+                pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
+        except Exception:
+            return
+
+        while self.running:
+            try:
+                async with websockets.connect(
+                    self.audio_uri,
+                    max_size=1024 * 1024,
+                    ping_interval=20,
+                    ping_timeout=20
+                ) as ws:
+                    console.print(f"[OK] Connected to desktop audio stream at {self.host_ip}:{self.audio_port}")
+                    while self.running:
+                        msg = await ws.recv()
+                        if isinstance(msg, bytes) and len(msg) > 0:
+                            try:
+                                sound = pygame.mixer.Sound(buffer=msg)
+                                sound.play()
+                            except Exception:
+                                pass
+            except Exception:
+                if self.running:
+                    await asyncio.sleep(2.0)
 
     def _run_network_loop(self):
         asyncio.run(self._network_client())
@@ -210,20 +218,18 @@ class GhostScreenViewer:
                     async def send_events():
                         while self.running:
                             try:
-                                # Dispatch coalesced mouse position if available
                                 if self.pending_mouse_pos:
                                     pos = self.pending_mouse_pos
                                     self.pending_mouse_pos = None
                                     await ws.send(json.dumps({"type": "mouse_move", "x": pos[0], "y": pos[1]}))
 
-                                # Drain all pending queued events immediately
                                 while not self.event_queue.empty():
                                     event_data = self.event_queue.get_nowait()
                                     await ws.send(json.dumps(event_data))
 
-                                await asyncio.sleep(0.003)
+                                await asyncio.sleep(0.002)
                             except queue.Empty:
-                                await asyncio.sleep(0.003)
+                                await asyncio.sleep(0.002)
                             except Exception:
                                 break
 
@@ -245,14 +251,14 @@ class GhostScreenViewer:
             except Exception as e:
                 self.connected = False
                 if self.running:
-                    console.print(f"[WARN] Connection lost: {e}. Retrying in 1.5s...")
+                    console.print(f"[WARN] Screen connection lost: {e}. Retrying in 1.5s...")
                     await asyncio.sleep(1.5)
             finally:
                 self.connected = False
 
     def _run_gui_loop(self):
         pygame.init()
-        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Ctrl+G Grab/Ungrab | F11 Fullscreen)")
+        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Ctrl+G Grab/Ungrab | F6 Color | F7 Size | F11 Fullscreen)")
         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         clock = pygame.time.Clock()
 
@@ -263,7 +269,6 @@ class GhostScreenViewer:
         font = pygame.font.SysFont("monospace", 14)
 
         while self.running:
-            # Handle Pygame input events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     self.running = False
@@ -342,15 +347,14 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
 
-                    # Hide default OS cursor when over remote desktop so our custom colored pointer is active
                     pygame.mouse.set_visible(not inside)
 
-                    if self.input_grabbed and render_w > 0 and render_h > 0:
+                    if render_w > 0 and render_h > 0 and (self.input_grabbed or self.mouse_pressed):
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
-                        # While mouse is held down (dragging/selecting text), push motion to event queue immediately
-                        if getattr(self, "mouse_pressed", False):
+                        # During drag-selection, immediately queue mouse moves for smooth tracking
+                        if self.mouse_pressed:
                             self.event_queue.put({"type": "mouse_move", "x": rx, "y": ry})
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
@@ -374,7 +378,7 @@ class GhostScreenViewer:
                         self.pending_mouse_pos = (rx, ry)
                         self.mouse_pressed = True
 
-                        # Click visual feedback ripple
+                        # Click ripple animation
                         if self.pointer_click_effect:
                             c_rgb = POINTER_COLORS[self.pointer_color_key]["rgb"]
                             self.click_ripples.append({
@@ -400,7 +404,7 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.mouse_pressed = False
 
-                    if self.input_grabbed and render_w > 0 and render_h > 0:
+                    if (inside or self.input_grabbed) and render_w > 0 and render_h > 0:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
@@ -425,32 +429,17 @@ class GhostScreenViewer:
                         self.win_w, self.win_h, raw_w, raw_h
                     )
 
-                current_surface = pygame.transform.scale(raw_surface, (render_w, render_h))
+                if (render_w, render_h) != (raw_w, raw_h):
+                    current_surface = pygame.transform.scale(raw_surface, (render_w, render_h))
+                else:
+                    current_surface = raw_surface
+
                 self.frame_count += 1
                 now = time.time()
                 if now - self.last_frame_time >= 1.0:
                     self.fps = self.frame_count
                     self.frame_count = 0
                     self.last_frame_time = now
-
-                # Quick check if frame is solid black
-                is_black = True
-                samples = [
-                    (nw // 2, nh // 2), (nw // 4, nh // 4), (3 * nw // 4, 3 * nh // 4),
-                    (nw // 2, nh // 4), (nw // 4, nh // 2)
-                ]
-                for sx, sy in samples:
-                    c = raw_surface.get_at((sx, sy))
-                    if c[0] > 5 or c[1] > 5 or c[2] > 5:
-                        is_black = False
-                        break
-                if is_black:
-                    self.consecutive_black_frames += 1
-                    if self.consecutive_black_frames >= 20:
-                        self.black_screen_warning = True
-                else:
-                    self.consecutive_black_frames = 0
-                    self.black_screen_warning = False
             except queue.Empty:
                 pass
 
@@ -483,21 +472,6 @@ class GhostScreenViewer:
             if self.cursor_visible and self.cursor_pos and self.cursor_surface:
                 screen.blit(self.cursor_surface, self.cursor_pos)
 
-            # Black screen diagnosis alert
-            if self.connected and self.black_screen_warning:
-                alert_box = pygame.Surface((min(self.win_w - 60, 800), 75), pygame.SRCALPHA)
-                alert_box.fill((45, 10, 10, 220))
-                pygame.draw.rect(alert_box, (255, 70, 70), alert_box.get_rect(), 2)
-
-                t1 = font.render("[ALERT: BLACK SCREEN DETECTED - HOST RUNNING WAYLAND]", True, (255, 120, 120))
-                t2 = font.render("Wayland isolates display buffers. The Zorin PC must switch to an Xorg session.", True, (240, 240, 240))
-                t3 = font.render("Fix on Zorin PC: sudo sed -i 's/#*WaylandEnable=false/WaylandEnable=false/' /etc/gdm3/custom.conf", True, (255, 220, 120))
-
-                alert_box.blit(t1, (12, 8))
-                alert_box.blit(t2, (12, 28))
-                alert_box.blit(t3, (12, 48))
-                screen.blit(alert_box, (30, 45))
-
             # Toast banner (e.g. pointer color changed)
             if self.toast_msg and time.time() < self.toast_until:
                 t_surf = font.render(f"[ {self.toast_msg} ]", True, (255, 255, 255))
@@ -510,7 +484,7 @@ class GhostScreenViewer:
 
             # HUD overlay
             color_name = POINTER_COLORS[self.pointer_color_key]["name"]
-            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | Pointer: {color_name} (F6) | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Released (Ctrl+G)'} | F11"
+            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | Pointer: {color_name} (F6) | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Click inside to interact'} | F11"
             hud_surface = font.render(hud_text, True, (200, 200, 200))
             hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
             hud_bg.fill((0, 0, 0, 160))
@@ -518,11 +492,11 @@ class GhostScreenViewer:
             screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, 12))
 
             if not self.input_grabbed:
-                banner = font.render("[INPUT RELEASED] Press Ctrl+G to grab mouse & keyboard", True, (255, 200, 50))
+                banner = font.render("[CLICK SCREEN TO INTERACT] Auto-grabs focus on click | Ctrl+G to release", True, (255, 200, 50))
                 screen.blit(banner, (15, 15))
 
             pygame.display.flip()
             clock.tick(60)
 
         pygame.quit()
-        console.print("[SCREEN] Viewer window closed.")
+        console.print("[SCREEN] Screen viewer closed.")

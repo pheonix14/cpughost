@@ -342,6 +342,33 @@ def client(ip: Optional[str] = None, wait: bool = False):
 
 
 @main.command()
+@click.pass_context
+def auto(ctx):
+    """Auto-negotiate connection: connects if host exists, otherwise becomes host."""
+    check_and_apply_auto_update(silent=True)
+    cfg = load_config()
+    console.print("[AUTO] Probing hotspot network for active peers...")
+    disc = GhostDiscovery(port=cfg.get("discovery_port", 8989))
+    disc.start_listener()
+    time.sleep(1.5)
+    peers = [p for p in disc.get_active_peers() if "host" in p.get("roles", [])]
+    disc.stop()
+
+    if not peers:
+        active_ips = scan_hotspot_subnet(port=cfg.get("api_port", 8888), timeout=0.2)
+        for ip in active_ips:
+            peers.append({"ip": ip, "node_name": "Host", "roles": ["host"]})
+
+    if peers:
+        chosen = peers[0]
+        console.print(f"[AUTO] Discovered remote host at {chosen['ip']}. Auto-connecting as viewer...")
+        ctx.invoke(client, ip=chosen["ip"])
+    else:
+        console.print("[AUTO] No existing host found. Starting this PC as discoverable Host...")
+        run_host()
+
+
+@main.command()
 @click.argument("ip", required=False)
 def screen(ip: Optional[str] = None):
     """Open remote screen viewer window only."""

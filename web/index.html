@@ -183,6 +183,7 @@
             </div>
             <div style="margin-top: 12px; display: flex; gap: 8px;">
                 <button class="btn btn-primary" id="btnToggleScreen" onclick="toggleScreenStream()">Start Web Screen</button>
+                <button class="btn" id="btnToggleAudio" onclick="toggleAudioStream()">Start Desktop Audio</button>
             </div>
         </div>
     </div>
@@ -307,6 +308,62 @@
                 screenWs = null;
                 btnToggleScreen.innerText = 'Start Web Screen';
                 screenFps.innerText = 'Stream: Disconnected';
+            };
+        }
+
+        // Desktop Audio Stream
+        let audioWs = null;
+        let audioCtx = null;
+        const btnToggleAudio = document.getElementById('btnToggleAudio');
+
+        function toggleAudioStream() {
+            if (audioWs) {
+                audioWs.close();
+                audioWs = null;
+                btnToggleAudio.innerText = 'Start Desktop Audio';
+            } else {
+                startAudioStream();
+            }
+        }
+
+        function startAudioStream() {
+            let host = window.location.hostname || '127.0.0.1';
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+            }
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            audioWs = new WebSocket(`ws://${host}:8890`);
+            audioWs.binaryType = 'arraybuffer';
+            btnToggleAudio.innerText = 'Stop Desktop Audio';
+
+            let nextTime = 0;
+            audioWs.onmessage = (event) => {
+                let pcm16 = new Int16Array(event.data);
+                let numFrames = pcm16.length / 2;
+                if (numFrames <= 0) return;
+                let audioBuf = audioCtx.createBuffer(2, numFrames, 44100);
+                let leftChan = audioBuf.getChannelData(0);
+                let rightChan = audioBuf.getChannelData(1);
+                for (let i = 0; i < numFrames; i++) {
+                    leftChan[i] = pcm16[i * 2] / 32768.0;
+                    rightChan[i] = pcm16[i * 2 + 1] / 32768.0;
+                }
+                let src = audioCtx.createBufferSource();
+                src.buffer = audioBuf;
+                src.connect(audioCtx.destination);
+                let now = audioCtx.currentTime;
+                if (nextTime < now) {
+                    nextTime = now + 0.05;
+                }
+                src.start(nextTime);
+                nextTime += audioBuf.duration;
+            };
+
+            audioWs.onclose = () => {
+                audioWs = null;
+                btnToggleAudio.innerText = 'Start Desktop Audio';
             };
         }
 

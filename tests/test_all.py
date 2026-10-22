@@ -135,5 +135,35 @@ WaylandEnable=false
         self.assertIn(f"AutomaticLogin={user}", c)
 
 
+    def test_arp_neighbors_and_discovery_helpers(self):
+        from cpughost.config import get_arp_neighbors
+        neighbors = get_arp_neighbors()
+        self.assertIsInstance(neighbors, list)
+        for ip in neighbors:
+            parts = ip.split(".")
+            self.assertEqual(len(parts), 4)
+
+    def test_xauthority_and_display(self):
+        from cpughost.screen_server import ensure_xauthority, ensure_display_environment
+        ensure_xauthority()
+        ensure_display_environment()
+        self.assertTrue(bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")))
+
+    def test_server_info_and_ping(self):
+        from cpughost.server import create_app
+        cfg = load_config()
+        server_app = create_app(cfg)
+        client = TestClient(server_app)
+
+        res = client.get("/api/info")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["status"], "online")
+        self.assertEqual(res.json()["role"], "host")
+
+        res = client.get("/api/ping")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["ping"], "pong")
+
+
 if __name__ == "__main__":
     unittest.main()
