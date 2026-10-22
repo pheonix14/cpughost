@@ -4,9 +4,10 @@ import tempfile
 import shutil
 from pathlib import Path
 
-from cpughost.config import load_config, get_local_ip, get_broadcast_ip
+from cpughost.config import load_config, get_local_ip, get_broadcast_ip, wait_for_hotspot_ip
 from cpughost.discovery import GhostDiscovery
 from cpughost.drive_server import create_drive_routes
+from cpughost.screen_server import ensure_display_environment
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
@@ -29,6 +30,10 @@ class TestCPUGhost(unittest.TestCase):
         self.assertTrue(len(ip.split(".")) == 4)
         bcast = get_broadcast_ip(ip)
         self.assertTrue(bcast.endswith(".255") or bcast == "255.255.255.255")
+
+        # Test wait_for_hotspot_ip (short timeout test)
+        resolved_ip = wait_for_hotspot_ip(timeout=2.0, poll_interval=0.5)
+        self.assertEqual(resolved_ip, ip)
 
     def test_drive_status_and_crud(self):
         # 1. Status
@@ -65,10 +70,15 @@ class TestCPUGhost(unittest.TestCase):
         disc.start_broadcaster(roles=["host", "test"])
         disc.start_listener()
         import time
-        time.sleep(2.0)
+        time.sleep(1.5)
         peers = disc.get_active_peers()
         disc.stop()
         self.assertTrue(len(peers) >= 0)
+
+    def test_display_environment_check(self):
+        # Should not raise exception
+        ensure_display_environment()
+        self.assertTrue(bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")))
 
 
 if __name__ == "__main__":

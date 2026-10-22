@@ -102,6 +102,35 @@ When the screen viewer window is open:
 
 ---
 
+## Autostart on Boot & Zorin OS Setup
+
+To have the secondary PC start CPUGhost automatically whenever powered on without a monitor:
+
+### 1-Click Setup on Zorin OS:
+Run the automated installer script:
+```bash
+./setup_zorin_host.sh
+```
+
+### Or using the CLI:
+```bash
+# Enable autostart on boot/login
+ghost autostart enable
+
+# Check autostart status
+ghost autostart status
+
+# Disable autostart
+ghost autostart disable
+```
+
+### Headless Recommendations for Zorin OS:
+1. In Zorin OS Settings -> Users, toggle **Automatic Login** to ON.
+2. Connect the Zorin OS PC to your phone hotspot Wi-Fi once. It will auto-reconnect on every boot.
+3. CPUGhost automatically waits for the hotspot Wi-Fi IP and initializes a headless virtual display if no physical monitor is connected.
+
+---
+
 ## Web Control Center
 
 When host mode is active, the Web Control Center is available at:

@@ -2,6 +2,7 @@ import os
 os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
 import sys
 import time
+import shutil
 import signal
 import subprocess
 from pathlib import Path
@@ -318,6 +319,122 @@ def stop():
             PID_FILE.unlink()
 
 
+@main.group()
+def autostart():
+    """Configure CPUGhost to start automatically on system boot."""
+    pass
+
+
+@autostart.command(name="enable")
+def autostart_enable():
+    """Enable CPUGhost Host autostart on boot/login."""
+    ghost_bin = shutil.which("ghost") or str(Path.home() / ".local" / "bin" / "ghost")
+    if not Path(ghost_bin).exists():
+        ghost_bin = str(Path(__file__).resolve().parent.parent / "bin" / "ghost")
+
+    # 1. XDG Autostart (.desktop)
+    autostart_dir = Path.home() / ".config" / "autostart"
+    autostart_dir.mkdir(parents=True, exist_ok=True)
+    desktop_file = autostart_dir / "cpughost.desktop"
+    desktop_content = f"""[Desktop Entry]
+Type=Application
+Name=CPUGhost Host
+Comment=Headless Dual-PC Hotspot Screen and Virtual Pen Drive System
+Exec={ghost_bin} host --daemon
+Hidden=false
+NoDisplay=false
+X-GNOME-Autostart-enabled=true
+"""
+    desktop_file.write_text(desktop_content)
+    console.print(f"[OK] Created XDG autostart entry: {desktop_file}")
+
+    # 2. Systemd user service
+    systemd_dir = Path.home() / ".config" / "systemd" / "user"
+    systemd_dir.mkdir(parents=True, exist_ok=True)
+    service_file = systemd_dir / "cpughost.service"
+    service_content = f"""[Unit]
+Description=CPUGhost Headless Dual-PC Host Service
+After=network.target network-online.target
+
+[Service]
+Type=simple
+ExecStart={ghost_bin} host
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
+"""
+    service_file.write_text(service_content)
+    console.print(f"[OK] Created systemd user unit: {service_file}")
+
+    # Reload systemd and enable service
+    try:
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+        subprocess.run(["systemctl", "--user", "enable", "cpughost.service"], capture_output=True)
+        console.print("[OK] Enabled systemd service: cpughost.service")
+    except Exception:
+        pass
+
+    # Attempt to enable linger so user services run even before manual login
+    try:
+        user = os.environ.get("USER", "zero")
+        subprocess.run(["loginctl", "enable-linger", user], capture_output=True)
+        console.print(f"[OK] Enabled user session lingering for: {user}")
+    except Exception:
+        pass
+
+    console.print("[OK] CPUGhost will now start automatically whenever this PC turns on.")
+
+
+@autostart.command(name="disable")
+def autostart_disable():
+    """Disable CPUGhost Host autostart."""
+    desktop_file = Path.home() / ".config" / "autostart" / "cpughost.desktop"
+    if desktop_file.exists():
+        desktop_file.unlink()
+        console.print(f"[OK] Removed {desktop_file}")
+
+    service_file = Path.home() / ".config" / "systemd" / "user" / "cpughost.service"
+    try:
+        subprocess.run(["systemctl", "--user", "disable", "cpughost.service"], capture_output=True)
+        subprocess.run(["systemctl", "--user", "stop", "cpughost.service"], capture_output=True)
+    except Exception:
+        pass
+
+    if service_file.exists():
+        service_file.unlink()
+        console.print(f"[OK] Removed {service_file}")
+
+    try:
+        subprocess.run(["systemctl", "--user", "daemon-reload"], capture_output=True)
+    except Exception:
+        pass
+
+    console.print("[OK] CPUGhost autostart disabled.")
+
+
+@autostart.command(name="status")
+def autostart_status():
+    """Check autostart configuration status."""
+    desktop_file = Path.home() / ".config" / "autostart" / "cpughost.desktop"
+    service_file = Path.home() / ".config" / "systemd" / "user" / "cpughost.service"
+
+    desktop_active = desktop_file.exists()
+    service_active = service_file.exists()
+
+    table = Table(title="CPUGhost Autostart Status")
+    table.add_column("Autostart Method", style="cyan")
+    table.add_column("File Path", style="bold white")
+    table.add_column("Status", style="green")
+
+    table.add_row("XDG Desktop Autostart", str(desktop_file), "[ENABLED]" if desktop_active else "[DISABLED]")
+    table.add_row("Systemd User Service", str(service_file), "[ENABLED]" if service_active else "[DISABLED]")
+
+    console.print(table)
+
+
 def interactive_menu():
     """Interactive ASCII Dashboard."""
     while True:
@@ -337,6 +454,7 @@ def interactive_menu():
         console.print(" [6] Scan Hotspot Network for Peers")
         console.print(" [7] Stop Background Host")
         console.print(" [8] System Status & Settings")
+        console.print(" [9] Autostart on Boot (Enable / Disable / Status)")
         console.print(" [0] Exit")
         console.print("------------------------------------------------------------------")
 
@@ -381,6 +499,16 @@ def interactive_menu():
         elif choice == "8":
             ctx = click.get_current_context()
             ctx.invoke(status)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "9":
+            sub = click.prompt(" Autostart action [enable|disable|status]", default="status")
+            ctx = click.get_current_context()
+            if sub == "enable":
+                ctx.invoke(autostart_enable)
+            elif sub == "disable":
+                ctx.invoke(autostart_disable)
+            else:
+                ctx.invoke(autostart_status)
             click.prompt(" Press Enter to continue", default="", show_default=False)
         elif choice == "0":
             console.print("[INFO] Exiting CPUGhost.")

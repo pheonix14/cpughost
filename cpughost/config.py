@@ -59,6 +59,21 @@ def get_local_ip() -> str:
     return ip
 
 
+def wait_for_hotspot_ip(timeout: float = 60.0, poll_interval: float = 2.0) -> str:
+    """
+    Poll until a valid non-loopback IP is assigned by the phone hotspot.
+    Ensures safe, error-free startup when booted headlessly.
+    """
+    import time
+    start = time.time()
+    while time.time() - start < timeout:
+        ip = get_local_ip()
+        if ip != "127.0.0.1":
+            return ip
+        time.sleep(poll_interval)
+    return get_local_ip()
+
+
 def get_broadcast_ip(local_ip: str) -> str:
     """Calculate broadcast address for /24 hotspot subnet."""
     parts = local_ip.split(".")

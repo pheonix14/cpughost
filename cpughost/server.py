@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 import uvicorn
 from rich.console import Console
 
-from .config import load_config, get_local_ip
+from .config import load_config, get_local_ip, wait_for_hotspot_ip
 from .discovery import GhostDiscovery
 from .drive_server import create_drive_routes
 from .screen_server import GhostScreenServer
@@ -61,6 +61,12 @@ class GhostHostServer:
 
     def start(self):
         self.running = True
+
+        # Ensure network IP is ready (critical for headless boot)
+        if self.local_ip == "127.0.0.1":
+            console.print("[WAIT] Waiting for phone hotspot Wi-Fi connection...")
+            self.local_ip = wait_for_hotspot_ip(timeout=60.0)
+
         console.print(f"[HOST] Starting CPUGhost Host on {self.local_ip}")
         console.print(f"[HOST] HTTP API & Pen Drive: http://{self.local_ip}:{self.api_port}")
         console.print(f"[HOST] Screen Stream WebSocket: ws://{self.local_ip}:{self.stream_port}")
