@@ -53,37 +53,104 @@ KEY_MAPPING = {
 }
 
 
+import glob
+
+def find_xauthority() -> Optional[str]:
+    """Auto-discover valid Xauthority file for headless/daemon processes."""
+    existing = os.environ.get("XAUTHORITY")
+    if existing and os.path.exists(existing) and os.path.getsize(existing) > 0:
+        return existing
+
+    uid = os.getuid()
+    # Check candidate paths in /run/user/<uid>
+    candidates = (
+        glob.glob(f"/run/user/{uid}/.mutter-Xwaylandauth.*") +
+        glob.glob(f"/run/user/{uid}/gdm/Xauthority*") +
+        glob.glob(f"/run/user/{uid}/*xauth*") +
+        [os.path.expanduser("~/.Xauthority")]
+    )
+    for c in candidates:
+        if "ICE" not in c and os.path.exists(c) and os.path.getsize(c) > 0:
+            return c
+
+    # Search running desktop processes for XAUTHORITY
+    for proc_env in glob.glob("/proc/[0-9]*/environ"):
+        try:
+            with open(proc_env, "rb") as f:
+                data = f.read().split(b"\0")
+                for item in data:
+                    if item.startswith(b"XAUTHORITY="):
+                        path = item.split(b"=", 1)[1].decode("utf-8", errors="ignore")
+                        if os.path.exists(path) and os.access(path, os.R_OK):
+                            return path
+        except (PermissionError, FileNotFoundError):
+            continue
+    return None
+
+
 def ensure_display_environment(resolution: str = "1920x1080"):
-    """Ensure a valid X11 or Wayland display environment variable exists."""
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        # Check standard active X11 sockets
-        for num in range(5):
-            sock = f"/tmp/.X11-unix/X{num}"
-            if os.path.exists(sock):
-                os.environ["DISPLAY"] = f":{num}"
-                console.print(f"[SCREEN] Attached to detected display: :{num}")
-                return
+    """Ensure valid DISPLAY and XAUTHORITY environment variables exist."""
+    # 1. Ensure XAUTHORITY is set
+    auth_file = find_xauthority()
+    if auth_file:
+        os.environ["XAUTHORITY"] = auth_file
 
-        # If no display found and Xvfb is available, spawn virtual framebuffer
-        xvfb_bin = shutil.which("Xvfb")
-        if xvfb_bin:
+    # 2. Ensure DISPLAY is set
+    if not os.environ.get("DISPLAY"):
+        # Check active processes for DISPLAY
+        found_disp = None
+        for proc_env in glob.glob("/proc/[0-9]*/environ"):
             try:
-                res_spec = f"{resolution}x24"
-                subprocess.Popen(
-                    [xvfb_bin, ":99", "-screen", "0", res_spec, "-nocursor"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    preexec_fn=os.setpgrp
-                )
-                time.sleep(0.5)
-                os.environ["DISPLAY"] = ":99"
-                console.print(f"[SCREEN] Spawned virtual monitor on display :99 ({resolution} Xvfb)")
-                return
-            except Exception:
-                pass
+                with open(proc_env, "rb") as f:
+                    data = f.read().split(b"\0")
+                    for item in data:
+                        if item.startswith(b"DISPLAY="):
+                            val = item.split(b"=", 1)[1].decode("utf-8", errors="ignore")
+                            if val.startswith(":"):
+                                found_disp = val
+                                break
+                if found_disp:
+                    break
+            except (PermissionError, FileNotFoundError):
+                continue
 
-        # Fallback default
-        os.environ["DISPLAY"] = ":0"
+        if found_disp:
+            os.environ["DISPLAY"] = found_disp
+        else:
+            # Check standard active X11 sockets
+            for num in range(5):
+                sock = f"/tmp/.X11-unix/X{num}"
+                if os.path.exists(sock):
+                    os.environ["DISPLAY"] = f":{num}"
+                    break
+
+        if not os.environ.get("DISPLAY"):
+            # If no display found and Xvfb is available, spawn virtual framebuffer
+            xvfb_bin = shutil.which("Xvfb")
+            if xvfb_bin:
+                try:
+                    res_spec = f"{resolution}x24"
+                    subprocess.Popen(
+                        [xvfb_bin, ":99", "-screen", "0", res_spec, "-nocursor"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        preexec_fn=os.setpgrp
+                    )
+                    time.sleep(0.5)
+                    os.environ["DISPLAY"] = ":99"
+                    console.print(f"[SCREEN] Spawned virtual monitor on display :99 ({resolution} Xvfb)")
+                except Exception:
+                    os.environ["DISPLAY"] = ":0"
+            else:
+                os.environ["DISPLAY"] = ":0"
+
+    # 3. Disable DPMS screen blanking / sleep timeouts on X server
+    try:
+        subprocess.run(["xset", "-dpms"], capture_output=True, timeout=1)
+        subprocess.run(["xset", "s", "off"], capture_output=True, timeout=1)
+        subprocess.run(["xset", "s", "noblank"], capture_output=True, timeout=1)
+    except Exception:
+        pass
 
 
 class GhostScreenServer:
@@ -235,8 +302,11 @@ class GhostScreenServer:
                         frame_bytes = buf.getvalue()
 
                         websockets.broadcast(self.clients, frame_bytes)
-                    except Exception:
-                        # Display might be momentarily unavailable; attempt re-init on next tick
+                    except Exception as e:
+                        now = time.time()
+                        if now - getattr(self, "_last_grab_err_time", 0) > 3.0:
+                            console.print(f"[WARN] Screen capture error: {e}")
+                            self._last_grab_err_time = now
                         self.sct = None
                         self.monitor = None
 

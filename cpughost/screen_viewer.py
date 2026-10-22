@@ -97,6 +97,9 @@ class GhostScreenViewer:
         self.last_frame_time = time.time()
         self.fps = 0
         self.frame_count = 0
+        self.connected = False
+        self.black_screen_warning = False
+        self.consecutive_black_frames = 0
 
     def start(self):
         console.print(f"[SCREEN] Connecting viewer window to ws://{self.host_ip}:{self.port}...")
@@ -119,6 +122,7 @@ class GhostScreenViewer:
                     ping_interval=20,
                     ping_timeout=20
                 ) as ws:
+                    self.connected = True
                     console.print(f"[OK] Connected to screen stream at {self.host_ip}")
 
                     async def send_events():
@@ -153,9 +157,12 @@ class GhostScreenViewer:
 
                     await asyncio.gather(send_events(), receive_frames())
             except Exception as e:
+                self.connected = False
                 if self.running:
-                    console.print(f"[WARN] Connection lost: {e}. Retrying in 2s...")
-                    time.sleep(2)
+                    console.print(f"[WARN] Connection lost: {e}. Retrying in 1.5s...")
+                    await asyncio.sleep(1.5)
+            finally:
+                self.connected = False
 
     def _run_gui_loop(self):
         pygame.init()
@@ -289,21 +296,64 @@ class GhostScreenViewer:
                     self.fps = self.frame_count
                     self.frame_count = 0
                     self.last_frame_time = now
+
+                # Quick check if frame is solid black
+                is_black = True
+                samples = [
+                    (nw // 2, nh // 2), (nw // 4, nh // 4), (3 * nw // 4, 3 * nh // 4),
+                    (nw // 2, nh // 4), (nw // 4, nh // 2)
+                ]
+                for sx, sy in samples:
+                    c = raw_surface.get_at((sx, sy))
+                    if c[0] > 5 or c[1] > 5 or c[2] > 5:
+                        is_black = False
+                        break
+                if is_black:
+                    self.consecutive_black_frames += 1
+                    if self.consecutive_black_frames >= 20:
+                        self.black_screen_warning = True
+                else:
+                    self.consecutive_black_frames = 0
+                    self.black_screen_warning = False
             except queue.Empty:
                 pass
 
             # Render frame
-            if current_surface:
+            if self.connected and current_surface:
                 screen.fill((0, 0, 0))  # Black letterbox bars
                 screen.blit(current_surface, (offset_x, offset_y))
             else:
-                screen.fill((18, 20, 24))
-                txt = font.render(f"[WAIT] Connecting to CPUGhost at {self.host_ip}:{self.port}...", True, (150, 150, 150))
-                screen.blit(txt, (30, self.win_h // 2))
+                screen.fill((16, 20, 26))
+                title = font.render(f"[CPUGHOST MONITOR] Connecting to {self.host_ip}:{self.port}...", True, (0, 255, 170))
+                sub = font.render("Waiting for host screen service to stream. Auto-reconnecting in background...", True, (160, 170, 185))
+                screen.blit(title, (40, self.win_h // 2 - 25))
+                screen.blit(sub, (40, self.win_h // 2 + 5))
 
-            # HUD overlay when ungrabbed
+            # Black screen diagnosis alert
+            if self.connected and self.black_screen_warning:
+                alert_box = pygame.Surface((min(self.win_w - 60, 800), 75), pygame.SRCALPHA)
+                alert_box.fill((45, 10, 10, 220))
+                pygame.draw.rect(alert_box, (255, 70, 70), alert_box.get_rect(), 2)
+
+                t1 = font.render("[ALERT: BLACK SCREEN DETECTED - HOST RUNNING WAYLAND]", True, (255, 120, 120))
+                t2 = font.render("Wayland isolates display buffers. The Zorin PC must switch to an Xorg session.", True, (240, 240, 240))
+                t3 = font.render("Fix on Zorin PC: sudo sed -i 's/#*WaylandEnable=false/WaylandEnable=false/' /etc/gdm3/custom.conf", True, (255, 220, 120))
+
+                alert_box.blit(t1, (12, 8))
+                alert_box.blit(t2, (12, 28))
+                alert_box.blit(t3, (12, 48))
+                screen.blit(alert_box, (30, 45))
+
+            # HUD overlay
+            hud_text = f"{self.fps} FPS | {raw_w}x{raw_h} | {'Grabbed (Ctrl+G)' if self.input_grabbed else 'Released (Ctrl+G)'} | F11 Fullscreen"
+            hud_surface = font.render(hud_text, True, (200, 200, 200))
+            hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
+            hud_bg.fill((0, 0, 0, 160))
+            hud_bg.blit(hud_surface, (8, 4))
+            screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, 12))
+
             if not self.input_grabbed:
-                banner = font.render("[INPUT RELEASED] Press Ctrl+G to interact with remote desktop", True, (255, 200, 50))
+                banner = font.render("[INPUT RELEASED] Press Ctrl+G to grab mouse & keyboard", True, (255, 200, 50))
                 screen.blit(banner, (15, 15))
 
             pygame.display.flip()
