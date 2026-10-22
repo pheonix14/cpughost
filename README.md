@@ -58,9 +58,36 @@ ghost client 10.176.124.73
 
 When the screen viewer window is open:
 - **Ctrl + G**: Grab or release mouse & keyboard focus.
+- **F6** (or **C** when ungrabbed): Cycle custom Zorin mouse pointer accent colors in real time.
+- **F7** (or **P** when ungrabbed): Cycle mouse pointer size (1.0x, 1.3x, 1.7x, 2.0x).
 - **F11**: Toggle Fullscreen.
 - **Esc** or **Ctrl + Q**: Close viewer window (when focus is released).
+- Visual click ripples give immediate feedback when clicking on remote elements.
 - All mouse clicks (left, middle, right), mouse wheel scrolls, and keyboard strokes pass directly through to the secondary PC.
+
+---
+
+## Mouse Pointer Color & Theme Customization
+
+Customize the high-contrast colored cursor from the terminal:
+```bash
+# View available Zorin pointer colors
+ghost pointer
+
+# Set pointer color
+ghost pointer cyan      # Zorin Cyan / Teal
+ghost pointer green     # Zorin Emerald Green
+ghost pointer orange    # Zorin Sunset Orange
+ghost pointer red       # Zorin Crimson Red
+ghost pointer blue      # Zorin Sky Blue
+ghost pointer purple    # Zorin Violet
+ghost pointer yellow    # Neon Yellow
+ghost pointer pink      # Cyberpunk Pink
+ghost pointer white     # Classic White
+
+# Adjust pointer scale
+ghost pointer --size 1.5
+```
 
 ---
 
