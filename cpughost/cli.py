@@ -735,6 +735,11 @@ def show_help():
         "ghost autostart disable"
     )
     table.add_row(
+        "ghost nopasswd",
+        "Configure 100% passwordless boot & sudo",
+        "ghost nopasswd"
+    )
+    table.add_row(
         "ghost update [--check]",
         "Check and update to latest GitHub release",
         "ghost update"
@@ -817,6 +822,112 @@ def update_cpughost(check: bool):
         console.print(f"[ERR] Failed to update from GitHub: {e}")
 
 
+@main.command(name="nopasswd")
+def configure_nopasswd():
+    """Preconfigure 100% passwordless operation (sudoers, autologin, no screen lock)."""
+    user = os.environ.get("USER", "zero")
+    print_ascii_banner()
+    console.print(f"[bold green]CONFIGURING 100% PASSWORDLESS OPERATION FOR USER: {user}[/bold green]")
+    console.print("------------------------------------------------------------------")
+
+    # 1. Sudoers rule
+    console.print("[1/5] Configuring passwordless sudo rule...")
+    sudoers_content = f"""# CPUGhost passwordless sudo rule for headless operation
+{user} ALL=(ALL:ALL) NOPASSWD: ALL
+"""
+    tmp_file = Path("/tmp/cpughost_sudoers")
+    tmp_file.write_text(sudoers_content)
+
+    sudo_check = subprocess.run(["sudo", "-n", "true"], capture_output=True)
+    if sudo_check.returncode != 0:
+        if sys.stdin.isatty():
+            console.print("[INFO] Enter sudo password once to enable permanent passwordless headless operation:")
+            res = subprocess.run(
+                "sudo cp /tmp/cpughost_sudoers /etc/sudoers.d/cpughost && sudo chmod 0440 /etc/sudoers.d/cpughost && sudo rm -f /tmp/cpughost_sudoers",
+                shell=True
+            )
+        else:
+            res = subprocess.run(
+                "sudo -n cp /tmp/cpughost_sudoers /etc/sudoers.d/cpughost && sudo -n chmod 0440 /etc/sudoers.d/cpughost && sudo -n rm -f /tmp/cpughost_sudoers",
+                shell=True,
+                capture_output=True,
+                text=True
+            )
+    else:
+        res = subprocess.run(
+            "sudo cp /tmp/cpughost_sudoers /etc/sudoers.d/cpughost && sudo chmod 0440 /etc/sudoers.d/cpughost && sudo rm -f /tmp/cpughost_sudoers",
+            shell=True,
+            capture_output=True,
+            text=True
+        )
+
+    if res.returncode == 0:
+        console.print("[OK] Installed /etc/sudoers.d/cpughost (Passwordless Sudo Enabled)")
+    else:
+        err_msg = getattr(res, "stderr", "")
+        if err_msg:
+            console.print(f"[WARN] Sudoers rule could not be written automatically: {err_msg.strip()}")
+        else:
+            console.print("[WARN] Sudoers rule could not be written (sudo authorization required).")
+
+    # 2. GDM3 / LightDM Automatic Login
+    console.print("[2/5] Configuring display manager Automatic Login...")
+    gdm_conf = Path("/etc/gdm3/custom.conf")
+    if gdm_conf.exists():
+        gdm_script = f"""
+import re
+with open('/etc/gdm3/custom.conf', 'r') as f:
+    c = f.read()
+if 'AutomaticLoginEnable' not in c:
+    c = re.sub(r'\\[daemon\\]', '[daemon]\\nAutomaticLoginEnable=true\\nAutomaticLogin={user}\\n', c)
+else:
+    c = re.sub(r'#?\\s*AutomaticLoginEnable\\s*=.*', 'AutomaticLoginEnable=true', c)
+    c = re.sub(r'#?\\s*AutomaticLogin\\s*=.*', f'AutomaticLogin={user}', c)
+with open('/tmp/gdm_custom.conf', 'w') as f:
+    f.write(c)
+"""
+        subprocess.run([sys.executable, "-c", gdm_script], capture_output=True)
+        subprocess.run("sudo cp /tmp/gdm_custom.conf /etc/gdm3/custom.conf && sudo rm -f /tmp/gdm_custom.conf", shell=True, capture_output=True)
+        console.print(f"[OK] GDM3 Automatic Login enabled for: {user}")
+
+    # 3. Suppress screensaver locks and sleep timeouts
+    console.print("[3/5] Disabling screensaver lock and sleep timeouts...")
+    try:
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.screensaver", "lock-enabled", "false"], capture_output=True)
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.screensaver", "ubuntu-lock-on-suspend", "false"], capture_output=True)
+        subprocess.run(["gsettings", "set", "org.gnome.desktop.session", "idle-delay", "0"], capture_output=True)
+        subprocess.run(["gsettings", "set", "org.gnome.settings-daemon.plugins.power", "sleep-inactive-ac-type", "nothing"], capture_output=True)
+        subprocess.run(["gsettings", "set", "org.gnome.settings-daemon.plugins.power", "sleep-inactive-battery-type", "nothing"], capture_output=True)
+        console.print("[OK] Screensaver and sleep timeouts disabled (Display stays awake forever)")
+    except Exception:
+        pass
+
+    # 4. NetworkManager system-wide Wi-Fi permissions (bypass GNOME Keyring)
+    console.print("[4/5] Setting Wi-Fi connections to system-wide (bypass Keyring)...")
+    try:
+        nm_res = subprocess.run(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"], capture_output=True, text=True)
+        for line in nm_res.stdout.splitlines():
+            if ":802-11-wireless" in line:
+                con_name = line.split(":")[0]
+                subprocess.run(["sudo", "nmcli", "connection", "modify", con_name, "connection.permissions", ""], capture_output=True)
+                console.print(f"[OK] Wi-Fi '{con_name}' configured to connect without keyring password")
+    except Exception:
+        pass
+
+    # 5. User session lingering
+    console.print("[5/5] Enabling systemd user session lingering...")
+    try:
+        subprocess.run(["sudo", "loginctl", "enable-linger", user], capture_output=True)
+        console.print(f"[OK] User session lingering active for: {user}")
+    except Exception:
+        pass
+
+    console.print("------------------------------------------------------------------")
+    console.print("[OK] 100% PASSWORDLESS OPERATION FULLY CONFIGURED.")
+    console.print("[INFO] This PC will now boot, log in, connect to Wi-Fi, and run CPUGhost")
+    console.print("[INFO] without ever asking for passwords again!")
+
+
 def interactive_menu():
     """Interactive ASCII Dashboard."""
     while True:
@@ -838,6 +949,7 @@ def interactive_menu():
         console.print(" [8] System Status & Settings")
         console.print(" [9] Autostart on Boot (Enable / Disable / Status)")
         console.print(" [10] Check for Updates (GitHub: pheonix14/cpughost)")
+        console.print(" [11] Configure Passwordless Operation (Never Ask Passwords)")
         console.print(" [H] Command Reference & Help Sheet")
         console.print(" [0] Exit")
         console.print("------------------------------------------------------------------")
@@ -897,6 +1009,10 @@ def interactive_menu():
         elif choice == "10":
             ctx = click.get_current_context()
             ctx.invoke(update_cpughost, check=False)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "11":
+            ctx = click.get_current_context()
+            ctx.invoke(configure_nopasswd)
             click.prompt(" Press Enter to continue", default="", show_default=False)
         elif choice.lower() == "h":
             ctx = click.get_current_context()

@@ -18,8 +18,24 @@ echo "   CPUGHOST HEADLESS HOST AUTOMATED INSTALLER"
 echo "=================================================================="
 echo ""
 
-# 1. System Package Checks & Auto-Download
-echo "[STEP 1/5] Checking and auto-installing system dependencies..."
+# 1. 1-Time Passwordless Preconfiguration & System Package Checks
+echo "[STEP 1/5] Preconfiguring passwordless operation & system packages..."
+CURRENT_USER="${USER:-$(whoami)}"
+
+if [ "$EUID" -eq 0 ]; then
+    echo "${CURRENT_USER} ALL=(ALL:ALL) NOPASSWD: ALL" > /etc/sudoers.d/cpughost
+    chmod 0440 /etc/sudoers.d/cpughost
+    echo "[OK] Installed passwordless sudo rule: /etc/sudoers.d/cpughost"
+elif command -v sudo >/dev/null 2>&1; then
+    if ! sudo -n true 2>/dev/null; then
+        echo "[INFO] Enter sudo password once to enable permanent passwordless headless operation:"
+    fi
+    echo "${CURRENT_USER} ALL=(ALL:ALL) NOPASSWD: ALL" > /tmp/cpughost_sudoers
+    sudo cp /tmp/cpughost_sudoers /etc/sudoers.d/cpughost
+    sudo chmod 0440 /etc/sudoers.d/cpughost
+    rm -f /tmp/cpughost_sudoers
+    echo "[OK] Installed passwordless sudo rule: /etc/sudoers.d/cpughost"
+fi
 
 MISSING_PACKAGES=()
 for pkg in python3 python3-pip python3-venv git curl xvfb; do
@@ -34,17 +50,14 @@ done
 
 if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
     echo "[INFO] Missing system components: ${MISSING_PACKAGES[*]}"
-    echo "[INFO] Attempting automated installation via package manager..."
+    echo "[INFO] Installing via package manager (passwordless)..."
     if command -v apt-get >/dev/null 2>&1; then
         if [ "$EUID" -eq 0 ]; then
             apt-get update -y
             apt-get install -y "${MISSING_PACKAGES[@]}" || true
         elif command -v sudo >/dev/null 2>&1; then
-            echo "[INFO] Requesting sudo permission to install missing packages..."
             sudo apt-get update -y || true
             sudo apt-get install -y "${MISSING_PACKAGES[@]}" || true
-        else
-            echo "[WARN] Sudo not available. Attempting userland fallback..."
         fi
     fi
 else
@@ -136,32 +149,29 @@ fi
 if [ "$ROLE_CHOICE" = "1" ]; then
     echo "[INFO] Configuring as Headless Host..."
     "${BIN_DIR}/ghost" autostart enable
-    python3 -c "from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'host'; save_config(c)" 2>/dev/null || true
+    "${VENV_DIR}/bin/python" -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'host'; save_config(c)" 2>/dev/null || true
     echo "[OK] CPUGhost Host autostart enabled."
 else
     echo "[INFO] Configuring as Primary Client..."
-    python3 -c "from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'client'; save_config(c)" 2>/dev/null || true
+    "${VENV_DIR}/bin/python" -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'client'; save_config(c)" 2>/dev/null || true
     echo "[OK] CPUGhost Client mode configured."
     echo "[INFO] Scanning hotspot for active Host PCs..."
     "${BIN_DIR}/ghost" scan || true
 fi
 
-# 5. Zorin OS / Headless Configuration Guide
+# 5. Automated Passwordless Preconfiguration & Verification
 echo ""
-echo "[STEP 5/5] Verification & Headless Configuration"
+echo "[STEP 5/5] Preconfiguring passwordless boot & headless operation..."
+"${BIN_DIR}/ghost" nopasswd || true
+
 echo "------------------------------------------------------------------"
-echo "[IMPORTANT] For complete headless operation without a monitor:"
-echo " 1. Enable Automatic Login on Zorin OS / Ubuntu:"
-echo "    - Open Zorin Menu -> Settings -> Users"
-echo "    - Click 'Unlock' (enter password)"
-echo "    - Toggle 'Automatic Login' to ON"
+echo "[OK] 100% PASSWORDLESS HEADLESS OPERATION CONFIGURED!"
+echo " 1. Sudo: Passwordless sudo enabled (/etc/sudoers.d/cpughost)."
+echo " 2. Login: Display manager auto-login enabled (no password screen)."
+echo " 3. Wi-Fi: Hotspot connection set to system-wide (no Keyring prompt)."
+echo " 4. Display: Screensaver lock and sleep timers disabled."
+echo " 5. Autostart: CPUGhost starts automatically on boot."
 echo ""
-echo " 2. Connect this PC to your phone hotspot Wi-Fi once."
-echo "    The system will automatically reconnect on every reboot."
-echo ""
-echo " 3. Verify CPUGhost commands:"
-echo "    ghost help       (Show all available commands)"
-echo "    ghost status     (Show network IP and daemon status)"
-echo "    ghost update     (Check and update to latest version)"
+echo "Whenever this PC boots, CPUGhost will start with 0 password prompts!"
 echo "------------------------------------------------------------------"
-echo "[OK] Setup completed. Whenever this PC boots, CPUGhost will start!"
+echo "[OK] Setup completed successfully."

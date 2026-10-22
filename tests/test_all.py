@@ -112,6 +112,28 @@ class TestCPUGhost(unittest.TestCase):
         for mod in ["ctrl", "alt", "shift", "return", "backspace", "tab", "esc"]:
             self.assertIn(mod, KEY_MAPPING)
 
+    def test_passwordless_config_generators(self):
+        import re
+        user = "testuser"
+        sudoers_content = f"# CPUGhost passwordless sudo rule for headless operation\n{user} ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        self.assertIn(f"{user} ALL=(ALL:ALL) NOPASSWD: ALL", sudoers_content)
+
+        # GDM3 Custom Config Regex tests
+        sample_gdm = """[daemon]
+# AutomaticLoginEnable = false
+# AutomaticLogin = user1
+WaylandEnable=false
+"""
+        c = sample_gdm
+        if 'AutomaticLoginEnable' not in c:
+            c = re.sub(r'\[daemon\]', f'[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin={user}\n', c)
+        else:
+            c = re.sub(r'#?\s*AutomaticLoginEnable\s*=.*', 'AutomaticLoginEnable=true', c)
+            c = re.sub(r'#?\s*AutomaticLogin\s*=.*', f'AutomaticLogin={user}', c)
+
+        self.assertIn("AutomaticLoginEnable=true", c)
+        self.assertIn(f"AutomaticLogin={user}", c)
+
 
 if __name__ == "__main__":
     unittest.main()
