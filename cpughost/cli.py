@@ -870,8 +870,8 @@ def configure_nopasswd():
         else:
             console.print("[WARN] Sudoers rule could not be written (sudo authorization required).")
 
-    # 2. GDM3 / LightDM Automatic Login
-    console.print("[2/5] Configuring display manager Automatic Login...")
+    # 2. GDM3 / LightDM Automatic Login & Xorg session
+    console.print("[2/5] Configuring display manager Automatic Login & Xorg session...")
     gdm_conf = Path("/etc/gdm3/custom.conf")
     if gdm_conf.exists():
         gdm_script = f"""
@@ -883,12 +883,19 @@ if 'AutomaticLoginEnable' not in c:
 else:
     c = re.sub(r'#?\\s*AutomaticLoginEnable\\s*=.*', 'AutomaticLoginEnable=true', c)
     c = re.sub(r'#?\\s*AutomaticLogin\\s*=.*', f'AutomaticLogin={user}', c)
+
+# Force Xorg session (disable Wayland) for seamless screen mirroring & input capture
+if 'WaylandEnable' in c:
+    c = re.sub(r'#?\\s*WaylandEnable\\s*=.*', 'WaylandEnable=false', c)
+else:
+    c = re.sub(r'\\[daemon\\]', '[daemon]\\nWaylandEnable=false', c)
+
 with open('/tmp/gdm_custom.conf', 'w') as f:
     f.write(c)
 """
         subprocess.run([sys.executable, "-c", gdm_script], capture_output=True)
         subprocess.run("sudo cp /tmp/gdm_custom.conf /etc/gdm3/custom.conf && sudo rm -f /tmp/gdm_custom.conf", shell=True, capture_output=True)
-        console.print(f"[OK] GDM3 Automatic Login enabled for: {user}")
+        console.print(f"[OK] GDM3 Automatic Login & Xorg session configured for: {user}")
 
     # 3. Suppress screensaver locks and sleep timeouts
     console.print("[3/5] Disabling screensaver lock and sleep timeouts...")
