@@ -131,6 +131,29 @@ ghost autostart disable
 
 ---
 
+## Auto-Update from GitHub
+
+Keep CPUGhost updated directly from the GitHub repository (`pheonix14/cpughost`):
+
+```bash
+# Check if updates are available
+ghost update --check
+
+# Pull and apply latest updates (re-syncs code, venv, and binary launcher)
+ghost update
+```
+
+---
+
+## Command Reference Cheat Sheet
+
+Display the full built-in reference card at any time:
+```bash
+ghost help
+```
+
+---
+
 ## Web Control Center
 
 When host mode is active, the Web Control Center is available at:

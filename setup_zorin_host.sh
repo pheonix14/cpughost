@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# CPUGhost - Zorin OS Headless Host 1-Click Setup Script
+# CPUGhost - Automated Host Installer & System Dependency Bootstrapper
 # ==============================================================================
 set -e
 
@@ -14,42 +14,83 @@ echo " | |   | |_) | | | | |  _| |_| | | | \___ \ | |   "
 echo " | |___|  __/| |_| | |_| |  _  | |_| |___) || |   "
 echo "  \____|_|    \___/ \____|_| |_|\___/|____/ |_|   "
 echo "=================================================================="
-echo "   ZORIN OS HEADLESS HOST AUTOMATED INSTALLER"
+echo "   CPUGHOST HEADLESS HOST AUTOMATED INSTALLER"
 echo "=================================================================="
 echo ""
 
-# 1. System Package Checks
-echo "[STEP 1/5] Checking system prerequisites..."
-if command -v apt-get >/dev/null 2>&1; then
-    echo "[INFO] Debian/Ubuntu/Zorin OS detected."
-    # Install Xvfb if sudo available (optional for virtual display fallback)
-    if sudo -n true 2>/dev/null; then
-        echo "[INFO] Installing xvfb for headless display support..."
-        sudo apt-get update -qq && sudo apt-get install -y -qq xvfb python3-venv python3-pip || true
-    else
-        echo "[INFO] Sudo not non-interactive. Ensure 'xvfb' is installed for virtual displays."
+# 1. System Package Checks & Auto-Download
+echo "[STEP 1/5] Checking and auto-installing system dependencies..."
+
+MISSING_PACKAGES=()
+for pkg in python3 python3-pip python3-venv git curl xvfb; do
+    if command -v dpkg-query >/dev/null 2>&1; then
+        if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
+            MISSING_PACKAGES+=("$pkg")
+        fi
+    elif ! command -v "$pkg" >/dev/null 2>&1; then
+        MISSING_PACKAGES+=("$pkg")
+    fi
+done
+
+if [ ${#MISSING_PACKAGES[@]} -gt 0 ]; then
+    echo "[INFO] Missing system components: ${MISSING_PACKAGES[*]}"
+    echo "[INFO] Attempting automated installation via package manager..."
+    if command -v apt-get >/dev/null 2>&1; then
+        if [ "$EUID" -eq 0 ]; then
+            apt-get update -y
+            apt-get install -y "${MISSING_PACKAGES[@]}" || true
+        elif command -v sudo >/dev/null 2>&1; then
+            echo "[INFO] Requesting sudo permission to install missing packages..."
+            sudo apt-get update -y || true
+            sudo apt-get install -y "${MISSING_PACKAGES[@]}" || true
+        else
+            echo "[WARN] Sudo not available. Attempting userland fallback..."
+        fi
+    fi
+else
+    echo "[OK] System packages verified."
+fi
+
+# 2. Python & Virtual Environment Bootstrapping
+echo ""
+echo "[STEP 2/5] Initializing Python environment..."
+VENV_DIR="${SCRIPT_DIR}/.venv"
+
+# Ensure Python 3 is available; if not, bootstrap portable Python via uv
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "[WARN] Python 3 not found on system. Bootstrapping standalone Python via uv..."
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "[INFO] Downloading uv standalone installer..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    fi
+    echo "[INFO] Auto-downloading portable CPython 3.12..."
+    uv python install 3.12
+    uv venv "${VENV_DIR}" --python 3.12
+elif command -v uv >/dev/null 2>&1; then
+    echo "[INFO] Creating virtual environment using uv..."
+    uv venv "${VENV_DIR}"
+else
+    echo "[INFO] Creating virtual environment using python3 venv..."
+    if ! python3 -m venv "${VENV_DIR}" 2>/dev/null; then
+        echo "[INFO] python3-venv module missing. Bootstrapping via uv..."
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+        uv venv "${VENV_DIR}"
     fi
 fi
 
-# 2. Virtual Environment Setup
-echo ""
-echo "[STEP 2/5] Initializing Python virtual environment..."
-VENV_DIR="${SCRIPT_DIR}/.venv"
+echo "[INFO] Installing CPUGhost dependencies into virtual environment..."
+DEPENDENCIES="fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx"
 
 if command -v uv >/dev/null 2>&1; then
-    echo "[INFO] Using uv package manager..."
-    uv venv "${VENV_DIR}"
-    uv pip install --python "${VENV_DIR}/bin/python" \
-        fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx
+    uv pip install --python "${VENV_DIR}/bin/python" ${DEPENDENCIES}
 else
-    echo "[INFO] Using python3 venv..."
-    python3 -m venv "${VENV_DIR}"
-    "${VENV_DIR}/bin/pip" install --upgrade pip
-    "${VENV_DIR}/bin/pip" install \
-        fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx
+    "${VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel
+    "${VENV_DIR}/bin/pip" install ${DEPENDENCIES}
 fi
 
-echo "[OK] Dependencies installed successfully."
+echo "[OK] Dependencies successfully installed in ${VENV_DIR}."
 
 # 3. CLI Command Symlink
 echo ""
@@ -58,12 +99,22 @@ mkdir -p "${BIN_DIR}"
 chmod +x "${SCRIPT_DIR}/bin/ghost"
 ln -sf "${SCRIPT_DIR}/bin/ghost" "${BIN_DIR}/ghost"
 
-# Ensure ~/.local/bin is in PATH for bashrc
+# Try to install to /usr/local/bin for all users if sudo is available
+if [ "$EUID" -eq 0 ]; then
+    ln -sf "${SCRIPT_DIR}/bin/ghost" "/usr/local/bin/ghost"
+elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo ln -sf "${SCRIPT_DIR}/bin/ghost" "/usr/local/bin/ghost" || true
+fi
+
+# Ensure ~/.local/bin is in PATH for shell sessions
 if ! echo "$PATH" | grep -q "${BIN_DIR}"; then
-    if [ -f "${HOME}/.bashrc" ]; then
-        echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "${HOME}/.bashrc"
-        echo "[INFO] Added ${BIN_DIR} to ~/.bashrc"
-    fi
+    for profile in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
+        if [ -f "$profile" ]; then
+            echo "export PATH=\"${BIN_DIR}:\$PATH\"" >> "$profile"
+            echo "[INFO] Added ${BIN_DIR} to $profile"
+            break
+        fi
+    done
 fi
 
 echo "[OK] 'ghost' command installed to ${BIN_DIR}/ghost."
@@ -74,22 +125,22 @@ echo "[STEP 4/5] Enabling automated startup on boot..."
 "${BIN_DIR}/ghost" autostart enable
 echo "[OK] CPUGhost autostart enabled."
 
-# 5. Zorin OS Automatic Login Guide
+# 5. Zorin OS / Headless Configuration Guide
 echo ""
 echo "[STEP 5/5] Verification & Headless Configuration"
 echo "------------------------------------------------------------------"
 echo "[IMPORTANT] For complete headless operation without a monitor:"
-echo " 1. Enable Automatic Login on Zorin OS:"
+echo " 1. Enable Automatic Login on Zorin OS / Ubuntu:"
 echo "    - Open Zorin Menu -> Settings -> Users"
 echo "    - Click 'Unlock' (enter password)"
 echo "    - Toggle 'Automatic Login' to ON"
 echo ""
 echo " 2. Connect this PC to your phone hotspot Wi-Fi once."
-echo "    Zorin OS will automatically reconnect on every reboot."
+echo "    The system will automatically reconnect on every reboot."
 echo ""
-echo " 3. Test running the host now:"
-echo "    ghost host"
-echo "    Or view status with:"
-echo "    ghost status"
+echo " 3. Verify CPUGhost commands:"
+echo "    ghost help       (Show all available commands)"
+echo "    ghost status     (Show network IP and daemon status)"
+echo "    ghost update     (Check and update to latest version)"
 echo "------------------------------------------------------------------"
 echo "[OK] Setup completed. Whenever this PC boots, CPUGhost will start!"

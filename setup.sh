@@ -1,0 +1,1 @@
+/home/zero/Desktop/cpughost/setup_zorin_host.sh

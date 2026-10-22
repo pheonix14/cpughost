@@ -435,6 +435,171 @@ def autostart_status():
     console.print(table)
 
 
+@main.command(name="help")
+def show_help():
+    """Show comprehensive command cheat sheet and documentation."""
+    print_ascii_banner()
+    console.print("[bold green]CPUGHOST COMMAND REFERENCE & CHEAT SHEET[/bold green]")
+    console.print("------------------------------------------------------------------")
+
+    table = Table(title="Available Commands", show_header=True)
+    table.add_column("Command", style="bold cyan", width=25)
+    table.add_column("Purpose", style="white")
+    table.add_column("Example", style="yellow")
+
+    table.add_row(
+        "ghost",
+        "Launch interactive ASCII dashboard",
+        "ghost"
+    )
+    table.add_row(
+        "ghost host [-d]",
+        "Start screen server and pen drive host",
+        "ghost host --daemon"
+    )
+    table.add_row(
+        "ghost client [ip]",
+        "Auto-connect, sync drive, and open screen",
+        "ghost client"
+    )
+    table.add_row(
+        "ghost screen [ip]",
+        "Open low-latency screen window only",
+        "ghost screen 10.176.124.73"
+    )
+    table.add_row(
+        "ghost drive ls [path]",
+        "List files stored on the virtual pen drive",
+        "ghost drive ls"
+    )
+    table.add_row(
+        "ghost drive push <file>",
+        "Upload local file/folder to pen drive",
+        "ghost drive push notes.txt"
+    )
+    table.add_row(
+        "ghost drive pull <file>",
+        "Download file from pen drive to local folder",
+        "ghost drive pull document.pdf"
+    )
+    table.add_row(
+        "ghost drive sync [dir]",
+        "Bidirectional folder sync with ghost drive",
+        "ghost drive sync ~/Desktop/GhostDrive"
+    )
+    table.add_row(
+        "ghost scan [--all]",
+        "Scan hotspot network for CPUGhost nodes",
+        "ghost scan"
+    )
+    table.add_row(
+        "ghost status",
+        "Display daemon state, IP, ports, and storage",
+        "ghost status"
+    )
+    table.add_row(
+        "ghost stop",
+        "Terminate running background ghost daemon",
+        "ghost stop"
+    )
+    table.add_row(
+        "ghost autostart enable",
+        "Enable automated host launch on system boot",
+        "ghost autostart enable"
+    )
+    table.add_row(
+        "ghost autostart status",
+        "Check boot autostart configuration",
+        "ghost autostart status"
+    )
+    table.add_row(
+        "ghost autostart disable",
+        "Remove boot autostart entries",
+        "ghost autostart disable"
+    )
+    table.add_row(
+        "ghost update [--check]",
+        "Check and update to latest GitHub release",
+        "ghost update"
+    )
+    table.add_row(
+        "ghost help",
+        "Display this command cheat sheet",
+        "ghost help"
+    )
+
+    console.print(table)
+    console.print("")
+    console.print("[bold cyan]Screen Viewer Keyboard Shortcuts:[/bold cyan]")
+    console.print("  F11           : Toggle Fullscreen monitor mode")
+    console.print("  Ctrl + G      : Grab or Release mouse/keyboard control")
+    console.print("  Windows Key   : Open Zorin OS / remote desktop menu")
+    console.print("  Esc / Ctrl+Q  : Close monitor window (when ungrabbed)")
+    console.print("------------------------------------------------------------------")
+
+
+@main.command(name="update")
+@click.option("--check", is_flag=True, help="Only check for updates without applying")
+def update_cpughost(check: bool):
+    """Check for and apply updates from GitHub (pheonix14/cpughost)."""
+    project_dir = Path(__file__).resolve().parent.parent
+    git_dir = project_dir / ".git"
+
+    console.print("[UPDATE] Connecting to GitHub repository (pheonix14/cpughost)...")
+
+    if not git_dir.exists():
+        console.print("[WARN] CPUGhost is not installed as a git repository.")
+        console.print("[INFO] Re-cloning from https://github.com/pheonix14/cpughost.git recommended.")
+        return
+
+    try:
+        # 1. Fetch latest changes
+        subprocess.run(["git", "fetch", "origin", "main"], cwd=str(project_dir), check=True, capture_output=True)
+
+        # 2. Check commit difference
+        res = subprocess.run(
+            ["git", "rev-list", "HEAD..origin/main", "--count"],
+            cwd=str(project_dir),
+            capture_output=True,
+            text=True
+        )
+        behind_count = int(res.stdout.strip() or 0)
+
+        if behind_count == 0:
+            console.print("[OK] CPUGhost is already up to date with origin/main.")
+            return
+
+        console.print(f"[INFO] New update available: {behind_count} commit(s) behind GitHub.")
+
+        if check:
+            return
+
+        console.print("[UPDATE] Pulling latest updates from GitHub...")
+        subprocess.run(["git", "pull", "origin", "main"], cwd=str(project_dir), check=True, capture_output=True)
+
+        # 3. Update virtualenv dependencies
+        console.print("[UPDATE] Updating Python environment dependencies...")
+        venv_python = project_dir / ".venv" / "bin" / "python"
+        deps = "fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx"
+        if shutil.which("uv"):
+            subprocess.run(["uv", "pip", "install", "--python", str(venv_python)] + deps.split(), capture_output=True)
+        else:
+            pip_bin = project_dir / ".venv" / "bin" / "pip"
+            subprocess.run([str(pip_bin), "install", "-q"] + deps.split(), capture_output=True)
+
+        # 4. Re-link CLI binary
+        bin_source = project_dir / "bin" / "ghost"
+        bin_dest = Path.home() / ".local" / "bin" / "ghost"
+        if bin_source.exists():
+            bin_dest.parent.mkdir(parents=True, exist_ok=True)
+            bin_dest.unlink(missing_ok=True)
+            bin_dest.symlink_to(bin_source)
+
+        console.print("[OK] CPUGhost successfully updated to the latest version!")
+    except Exception as e:
+        console.print(f"[ERR] Failed to update from GitHub: {e}")
+
+
 def interactive_menu():
     """Interactive ASCII Dashboard."""
     while True:
@@ -455,6 +620,8 @@ def interactive_menu():
         console.print(" [7] Stop Background Host")
         console.print(" [8] System Status & Settings")
         console.print(" [9] Autostart on Boot (Enable / Disable / Status)")
+        console.print(" [10] Check for Updates (GitHub: pheonix14/cpughost)")
+        console.print(" [H] Command Reference & Help Sheet")
         console.print(" [0] Exit")
         console.print("------------------------------------------------------------------")
 
@@ -509,6 +676,14 @@ def interactive_menu():
                 ctx.invoke(autostart_disable)
             else:
                 ctx.invoke(autostart_status)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "10":
+            ctx = click.get_current_context()
+            ctx.invoke(update_cpughost, check=False)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice.lower() == "h":
+            ctx = click.get_current_context()
+            ctx.invoke(show_help)
             click.prompt(" Press Enter to continue", default="", show_default=False)
         elif choice == "0":
             console.print("[INFO] Exiting CPUGhost.")
