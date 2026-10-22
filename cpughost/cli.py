@@ -661,6 +661,105 @@ def stop():
             PID_FILE.unlink()
 
 
+@main.command(name="phone")
+@click.argument("device_or_ip", required=False)
+@click.option("--name", default="Caesar", help="Name of phone device")
+@click.option("--wireless", "-w", is_flag=True, help="Force wireless ADB connection over hotspot port 5555")
+@click.option("--port", "-p", default=5555, help="Wireless ADB port (default 5555)")
+@click.option("--turn-screen-off", "-S", is_flag=True, help="Turn off physical phone screen during mirroring")
+def phone_cmd(device_or_ip: Optional[str] = None, name: str = "Caesar", wireless: bool = False, port: int = 5555, turn_screen_off: bool = False):
+    """Mirror and control Android phone (Caesar) over USB or Wireless Hotspot."""
+    print_ascii_banner()
+    from .phone import (
+        is_adb_installed, is_scrcpy_installed,
+        connect_wireless, auto_scan_and_connect_phone, launch_phone_mirror
+    )
+
+    if not is_adb_installed():
+        console.print("[ERR] adb is not installed. Run: sudo apt install adb")
+        return
+
+    console.print(f"[PHONE] Initializing connection to [bold cyan]{name}[/bold cyan]...")
+
+    serial = None
+    if device_or_ip:
+        if "." in device_or_ip:  # IP address
+            ok, msg = connect_wireless(device_or_ip, port)
+            if ok:
+                console.print(f"[OK] Connected to {device_or_ip}:{port}")
+                serial = f"{device_or_ip}:{port}"
+            else:
+                console.print(f"[WARN] Wireless connect: {msg}")
+                serial = device_or_ip
+        else:
+            serial = device_or_ip
+    else:
+        serial = auto_scan_and_connect_phone(phone_name=name)
+
+    if not serial:
+        console.print("[WAIT] No phone detected over USB or wireless ADB.")
+        console.print("[INFO] To connect phone 'Caesar':")
+        console.print("  1. Enable 'Developer Options' and 'USB Debugging' (or 'Wireless Debugging') on Caesar.")
+        console.print("  2. Connect via USB cable OR over hotspot Wi-Fi.")
+        console.print("  3. For wireless, run: ghost phone <caesar-ip> (e.g. ghost phone 10.176.124.51)")
+        ip_manual = click.prompt("Enter Caesar's hotspot IP address (leave blank to cancel)", default="", show_default=False)
+        if ip_manual.strip():
+            ok, msg = connect_wireless(ip_manual.strip(), port)
+            if ok:
+                console.print(f"[OK] Connected to {ip_manual.strip()}:{port}")
+                serial = f"{ip_manual.strip()}:{port}"
+            else:
+                console.print(f"[ERR] Could not connect: {msg}")
+                return
+        else:
+            return
+
+    if is_scrcpy_installed():
+        console.print(f"[OK] Launching hardware-accelerated mirror and control for {name} ({serial})...")
+        proc = launch_phone_mirror(
+            serial=serial,
+            phone_name=name,
+            turn_screen_off=turn_screen_off
+        )
+        if proc:
+            proc.wait()
+    else:
+        console.print("[WARN] scrcpy is not installed. You can install it with: sudo apt install scrcpy")
+        console.print("[INFO] Phone connected via ADB. You can view Caesar inside CPUGhost viewer (Screen 9 / Caesar tab)!")
+
+
+@main.command(name="caesar")
+@click.pass_context
+def caesar_shortcut(ctx):
+    """Shortcut alias for 'ghost phone' targeting Caesar."""
+    ctx.invoke(phone_cmd, name="Caesar")
+
+
+@main.command(name="screens")
+def screens_cmd():
+    """List all available physical and virtual screens (Screens 1..8 + Caesar Phone)."""
+    print_ascii_banner()
+    table = Table(title="CPUGhost Multi-Screen Catalog (>5 Displays Supported)")
+    table.add_column("Screen ID", style="cyan", justify="center")
+    table.add_column("Name / Layout", style="bold white")
+    table.add_column("Shortcut", style="green")
+    table.add_column("Description", style="dim")
+
+    table.add_row("0", "All Screens (Panoramic)", "Alt+0", "Full combined multi-monitor desktop")
+    table.add_row("1", "Screen 1 (Main Display)", "Alt+1 / F2", "Primary host desktop screen")
+    table.add_row("2", "Screen 2: Top-Left", "Alt+2", "Secondary display / Top-Left workspace")
+    table.add_row("3", "Screen 3: Top-Right", "Alt+3", "Tertiary display / Top-Right workspace")
+    table.add_row("4", "Screen 4: Bottom-Left", "Alt+4", "Quaternary display / Bottom-Left workspace")
+    table.add_row("5", "Screen 5: Bottom-Right", "Alt+5", "Quinary display / Bottom-Right workspace")
+    table.add_row("6", "Screen 6: Center Focused", "Alt+6", "Senary display / Center workspace")
+    table.add_row("7", "Screen 7: Left Split", "Alt+7", "Septenary display / Left ultrawide half")
+    table.add_row("8", "Screen 8: Right Split", "Alt+8", "Octonary display / Right ultrawide half")
+    table.add_row("9", "Caesar Phone (📱 Android)", "F3 / Alt+9", "Android smartphone screen mirror & control")
+
+    console.print(table)
+    console.print("\n[INFO] Switch screens inside the viewer using [bold green]F2[/bold green], [bold green]F3[/bold green] (Phone), [bold green]Alt+1..8[/bold green], or by clicking the top tab bar!")
+
+
 @main.group()
 def autostart():
     """Configure CPUGhost to start automatically on system boot."""

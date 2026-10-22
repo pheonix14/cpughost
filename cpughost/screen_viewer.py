@@ -112,7 +112,7 @@ def make_cursor_surface(color_rgb: Tuple[int, int, int], scale: float = 1.2) -> 
 
 
 class GhostScreenViewer:
-    def __init__(self, host_ip: str, port: int = 8889, audio_port: int = 8890, initial_width: int = 1280, initial_height: int = 720):
+    def __init__(self, host_ip: str, port: int = 8889, audio_port: int = 8890, initial_width: int = 1280, initial_height: int = 720, screen_id: Optional[int] = None):
         self.host_ip = host_ip
         self.port = port
         self.audio_port = audio_port
@@ -158,6 +158,62 @@ class GhostScreenViewer:
         self.click_ripples: List[dict] = []
         self.toast_msg: Optional[str] = None
         self.toast_until: float = 0.0
+
+        # Multi-Screen (>5 Screens + Caesar Phone) Management
+        self.current_screen_id: int = screen_id if screen_id is not None else int(cfg.get("active_screen", 1))
+        self.show_screen_tabs: bool = True
+        self.screen_tabs: List[Tuple[int, str, pygame.Rect]] = []
+        self.available_screens = {
+            1: "Main 1",
+            2: "Screen 2",
+            3: "Screen 3",
+            4: "Screen 4",
+            5: "Screen 5",
+            6: "Screen 6",
+            7: "Left 7",
+            8: "Right 8",
+            9: "Caesar 📱",
+            0: "All (0)"
+        }
+
+    def switch_screen(self, screen_id: int):
+        """Switch active remote screen (supports screens 0-8 and phone screen 9)."""
+        self.current_screen_id = screen_id
+        cfg = load_config()
+        cfg["active_screen"] = screen_id
+        save_config(cfg)
+        self.event_queue.put({"type": "select_screen", "screen_id": screen_id})
+        sname = self.available_screens.get(screen_id, f"Screen {screen_id}")
+        self.show_toast(f"Display: {sname} (F2 Next | F3 Caesar)")
+
+    def cycle_next_screen(self):
+        """Cycle through all available screens (1..8, 9/Caesar, 0/All)."""
+        screen_order = [1, 2, 3, 4, 5, 6, 7, 8, 9, 0]
+        try:
+            cur_idx = screen_order.index(self.current_screen_id)
+            next_screen = screen_order[(cur_idx + 1) % len(screen_order)]
+        except ValueError:
+            next_screen = 1
+        self.switch_screen(next_screen)
+
+    def toggle_phone_screen(self):
+        """Toggle directly to/from Android phone screen (Caesar)."""
+        if self.current_screen_id == 9:
+            self.switch_screen(1)
+        else:
+            self.switch_screen(9)
+
+    def launch_phone_popout(self):
+        """Launch dedicated high-performance scrcpy mirror window for Caesar."""
+        try:
+            from .phone import launch_phone_mirror
+            proc = launch_phone_mirror(phone_name="Caesar")
+            if proc:
+                self.show_toast("Launched Caesar Mirror (scrcpy 60fps)")
+            else:
+                self.show_toast("Check adb/scrcpy connection for Caesar")
+        except Exception as e:
+            self.show_toast(f"Phone mirror: {e}")
 
     def adjust_zoom(self, delta: float):
         """Adjust screen zoom level (zoom in / zoom out)."""
@@ -324,6 +380,16 @@ class GhostScreenViewer:
                                         except queue.Empty:
                                             pass
                                     self.frame_queue.put(msg)
+                                elif isinstance(msg, str):
+                                    try:
+                                        evt = json.loads(msg)
+                                        if evt.get("type") == "screen_changed":
+                                            sid = evt.get("screen_id", 1)
+                                            sname = evt.get("name", f"Screen {sid}")
+                                            self.current_screen_id = sid
+                                            self.show_toast(f"Display: {sname}")
+                                    except Exception:
+                                        pass
                             except Exception:
                                 break
 
@@ -391,6 +457,51 @@ class GhostScreenViewer:
 
                 elif event.type == pygame.KEYDOWN:
                     # Dedicated Function Keys (NEVER intercept regular letters or symbols like c, p, -, +, =)
+                    # F1: Toggle Multi-Screen Selector Tabs Bar
+                    if event.key == pygame.K_F1:
+                        self.show_screen_tabs = not self.show_screen_tabs
+                        status = "Visible" if self.show_screen_tabs else "Hidden"
+                        self.show_toast(f"Multi-Screen Bar: {status} (F1)")
+                        continue
+
+                    # F2: Cycle next screen (Screens 1..8, Caesar Phone, All)
+                    if event.key == pygame.K_F2:
+                        self.cycle_next_screen()
+                        continue
+
+                    # F3: Toggle Phone "Caesar" screen (Shift+F3 launches scrcpy popout)
+                    if event.key == pygame.K_F3:
+                        if pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                            self.launch_phone_popout()
+                        else:
+                            self.toggle_phone_screen()
+                        continue
+
+                    # F4: Android Back / Home button when on Caesar Phone
+                    if event.key == pygame.K_F4:
+                        if self.current_screen_id == 9:
+                            self.event_queue.put({"type": "key_down", "key": "home"})
+                            self.show_toast("Phone: Sent HOME")
+                        continue
+
+                    # Alt + 0..8: Direct Screen Switch
+                    if (pygame.key.get_mods() & pygame.KMOD_ALT):
+                        alt_screen_map = {
+                            pygame.K_0: 0,
+                            pygame.K_1: 1,
+                            pygame.K_2: 2,
+                            pygame.K_3: 3,
+                            pygame.K_4: 4,
+                            pygame.K_5: 5,
+                            pygame.K_6: 6,
+                            pygame.K_7: 7,
+                            pygame.K_8: 8,
+                            pygame.K_9: 9,
+                        }
+                        if event.key in alt_screen_map:
+                            self.switch_screen(alt_screen_map[event.key])
+                            continue
+
                     # F11: Fullscreen toggle
                     if event.key == pygame.K_F11:
                         self.fullscreen = not self.fullscreen
@@ -506,6 +617,18 @@ class GhostScreenViewer:
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = event.pos
+
+                    # Check click on Multi-Screen Selector Tabs
+                    if self.show_screen_tabs and event.button == 1:
+                        tab_clicked = False
+                        for sid, sname, rect in self.screen_tabs:
+                            if rect.collidepoint(mx, my):
+                                self.switch_screen(sid)
+                                tab_clicked = True
+                                break
+                        if tab_clicked:
+                            continue
+
                     inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
@@ -626,15 +749,52 @@ class GhostScreenViewer:
                 t_bg.blit(t_surf, (12, 6))
                 screen.blit(t_bg, ((self.win_w - t_bg.get_width()) // 2, 70))
 
+            # Render Multi-Screen Selector Tabs Bar at top (Screens 1..8, Caesar Phone 📱, All 0)
+            if self.show_screen_tabs:
+                self.screen_tabs = []
+                tab_h = 24
+                tab_y = 6
+                cur_x = 12
+                tab_defs = [
+                    (1, "1:Main"),
+                    (2, "2:Scrn2"),
+                    (3, "3:Scrn3"),
+                    (4, "4:Scrn4"),
+                    (5, "5:Scrn5"),
+                    (6, "6:Scrn6"),
+                    (7, "7:Left"),
+                    (8, "8:Right"),
+                    (9, "📱Caesar"),
+                    (0, "0:All")
+                ]
+                for sid, label in tab_defs:
+                    is_active = (sid == self.current_screen_id)
+                    txt_color = (255, 255, 255) if is_active else (160, 175, 195)
+                    t_txt = font.render(label, True, txt_color)
+                    t_w = t_txt.get_width() + 14
+                    t_rect = pygame.Rect(cur_x, tab_y, t_w, tab_h)
+                    self.screen_tabs.append((sid, label, t_rect))
+
+                    bg_color = (25, 38, 48, 230) if is_active else (15, 20, 26, 180)
+                    t_surf = pygame.Surface((t_w, tab_h), pygame.SRCALPHA)
+                    t_surf.fill(bg_color)
+                    border_color = POINTER_COLORS[self.pointer_color_key]["rgb"] if is_active else (45, 55, 70)
+                    pygame.draw.rect(t_surf, border_color, t_surf.get_rect(), 2 if is_active else 1)
+                    t_surf.blit(t_txt, (7, 4))
+                    screen.blit(t_surf, (cur_x, tab_y))
+                    cur_x += t_w + 5
+
             # HUD overlay
             color_name = POINTER_COLORS[self.pointer_color_key]["name"]
             aspect_name = "16:9 Landscape" if self.force_16_9 else "Normal Ratio"
-            hud_text = f"{self.fps} FPS | {aspect_name} (F5) | Zoom: {int(self.zoom * 100)}% (F8/F9) | Pointer: {color_name} (F6) | F11"
+            cur_sname = self.available_screens.get(self.current_screen_id, f"Screen {self.current_screen_id}")
+            hud_text = f"{self.fps} FPS | {cur_sname} (F2/F3) | {aspect_name} (F5) | Zoom: {int(self.zoom * 100)}% (F8/F9) | F11"
             hud_surface = font.render(hud_text, True, (200, 200, 200))
             hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)
             hud_bg.fill((0, 0, 0, 160))
             hud_bg.blit(hud_surface, (8, 4))
-            screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, 12))
+            hud_y = 36 if self.show_screen_tabs else 12
+            screen.blit(hud_bg, (self.win_w - hud_bg.get_width() - 15, hud_y))
 
             pygame.display.flip()
             clock.tick(60)

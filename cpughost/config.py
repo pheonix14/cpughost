@@ -43,7 +43,12 @@ DEFAULT_CONFIG = {
     "force_16_9": False,
     "pointer_color": "zorin_cyan",
     "pointer_scale": 1.2,
-    "pointer_click_effect": True
+    "pointer_click_effect": True,
+    "phone_name": "Caesar",
+    "phone_ip": "",
+    "phone_port": 5555,
+    "active_screen": 1,
+    "max_screens": 8
 }
 
 

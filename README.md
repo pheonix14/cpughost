@@ -54,16 +54,43 @@ ghost client 10.176.124.73
 
 ---
 
+## Multi-Screen & Android Phone ("Caesar") Support
+
+CPUGhost now supports **more than 5 simultaneous screens** (Screens 1 through 8 + Caesar Phone + Panoramic View):
+
+- **Switch Screens**: Press <kbd>F2</kbd> to cycle next screen, or press <kbd>Alt</kbd>+<kbd>1</kbd> .. <kbd>Alt</kbd>+<kbd>8</kbd> to jump directly to any screen.
+- **Top Screen Tabs Bar**: Click any screen tab at the top of the viewer (`[1:Main]`, `[2:Scrn2]`, `[3:Scrn3]`, `[4:Scrn4]`, `[5:Scrn5]`, `[6:Scrn6]`, `[7:Left]`, `[8:Right]`, `[📱Caesar]`, `[0:All]`).
+- **Toggle Screen Bar**: Press <kbd>F1</kbd> to show or hide the multi-screen tabs bar.
+- **Phone Mirror & Control (Caesar)**:
+  - Inside viewer: Press <kbd>F3</kbd> or click `[📱Caesar]` to view and control your phone!
+  - High-performance popout window: Press <kbd>Shift</kbd> + <kbd>F3</kbd> or run:
+    ```bash
+    ghost phone              # Auto-detects Caesar via USB or Hotspot Wi-Fi
+    ghost caesar             # Quick alias
+    ghost phone 10.176.124.X # Direct wireless connect
+    ```
+- **List All Displays**:
+  ```bash
+  ghost screens
+  ```
+
+---
+
 ## Screen Viewer Window Controls
 
 When the screen viewer window is open:
-- **Ctrl + G**: Grab or release mouse & keyboard focus.
-- **F6** (or **C** when ungrabbed): Cycle custom Zorin mouse pointer accent colors in real time.
-- **F7** (or **P** when ungrabbed): Cycle mouse pointer size (1.0x, 1.3x, 1.7x, 2.0x).
+- **Click inside canvas**: Focuses window and locks keyboard directly to remote OS (Super/Windows key routes to Zorin, mouse cursor roams 100% free).
+- **F1**: Toggle multi-screen tab bar.
+- **F2**: Cycle next screen (Screens 1..8, Caesar Phone, Panoramic).
+- **F3**: Toggle Caesar Phone screen (<kbd>Shift</kbd>+<kbd>F3</kbd> for 60fps scrcpy popout).
+- **F4**: Send Android Home / App Switch when viewing Caesar.
+- **F5**: Toggle 16:9 Landscape Mode vs Native Aspect Ratio.
+- **F6**: Cycle custom Zorin mouse pointer accent colors in real time.
+- **F7**: Cycle mouse pointer size (1.0x, 1.3x, 1.7x, 2.0x).
+- **F8 / F9**: Zoom out / Zoom in screen canvas.
+- **F10**: Reset zoom to 100% normal view.
 - **F11**: Toggle Fullscreen.
-- **Esc** or **Ctrl + Q**: Close viewer window (when focus is released).
-- Visual click ripples give immediate feedback when clicking on remote elements.
-- All mouse clicks (left, middle, right), mouse wheel scrolls, and keyboard strokes pass directly through to the secondary PC.
+- **Ctrl + Shift + Q**: Close viewer window.
 
 ---
 

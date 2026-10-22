@@ -181,9 +181,59 @@ WaylandEnable=false
         self.assertIsInstance(devices, list)
         ip = detect_phone_ip("10.176.124.51")
         self.assertEqual(ip, "10.176.124.51")
-        # gateway may be None or string
         gw = get_default_gateway_ip()
         self.assertTrue(gw is None or isinstance(gw, str))
+
+    def test_phone_module_and_caesar(self):
+        from cpughost.phone import is_adb_installed, is_scrcpy_installed, get_connected_devices, PhoneController
+        self.assertTrue(is_adb_installed())
+        self.assertTrue(is_scrcpy_installed())
+        devices = get_connected_devices()
+        self.assertIsInstance(devices, list)
+
+        ctrl = PhoneController()
+        self.assertIsNotNone(ctrl)
+        self.assertTrue(hasattr(ctrl, "tap"))
+        self.assertTrue(hasattr(ctrl, "swipe"))
+        self.assertTrue(hasattr(ctrl, "home"))
+        self.assertTrue(hasattr(ctrl, "back"))
+
+    def test_multi_screen_support_catalog(self):
+        from cpughost.screen_server import GhostScreenServer
+        server = GhostScreenServer(port=18889)
+        server._refresh_screens_catalog()
+        # Verify MORE THAN 5 screens are supported
+        self.assertGreater(len(server.screens), 5)
+        # Check standard displays and Caesar phone
+        self.assertIn(1, server.screens)
+        self.assertIn(2, server.screens)
+        self.assertIn(3, server.screens)
+        self.assertIn(4, server.screens)
+        self.assertIn(5, server.screens)
+        self.assertIn(6, server.screens)
+        self.assertIn(9, server.screens)  # Caesar Phone
+        self.assertIn("Caesar", server.screen_names[9])
+
+    def test_screen_viewer_multi_screen_switching(self):
+        from cpughost.screen_viewer import GhostScreenViewer
+        viewer = GhostScreenViewer("127.0.0.1", port=18889, screen_id=1)
+        self.assertEqual(viewer.current_screen_id, 1)
+
+        # Switch to Screen 3
+        viewer.switch_screen(3)
+        self.assertEqual(viewer.current_screen_id, 3)
+
+        # Switch to Caesar Phone (9)
+        viewer.switch_screen(9)
+        self.assertEqual(viewer.current_screen_id, 9)
+
+        # Toggle phone screen
+        viewer.toggle_phone_screen()
+        self.assertEqual(viewer.current_screen_id, 1)
+
+        # Cycle screens
+        viewer.cycle_next_screen()
+        self.assertEqual(viewer.current_screen_id, 2)
 
 
 if __name__ == "__main__":

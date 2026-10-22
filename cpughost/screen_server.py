@@ -513,6 +513,10 @@ class GhostScreenServer:
         self.wayland_cap: Optional[WaylandScreenCapture] = None
         self.sct: Optional[mss.mss] = None
         self.monitor = None
+        self.active_screen_id: int = 1
+        self.screens: Dict[int, dict] = {}
+        self.screen_names: Dict[int, str] = {}
+        self.phone_controller = None
 
         self._init_input_controllers()
         self._init_screen_capture()
@@ -525,19 +529,76 @@ class GhostScreenServer:
             self.mouse = None
             self.keyboard = None
 
+    def _refresh_screens_catalog(self):
+        """
+        Enumerate physical monitors and construct virtual workspaces up to 8+ screens.
+        Also registers Screen 9 for Android Phone ('Caesar').
+        """
+        self.screens = {}
+        self.screen_names = {}
+
+        if self.sct and self.sct.monitors:
+            total = len(self.sct.monitors)
+            if total > 1:
+                self.screens[0] = self.sct.monitors[0]
+                self.screen_names[0] = f"All Screens ({self.sct.monitors[0]['width']}x{self.sct.monitors[0]['height']})"
+                for i in range(1, total):
+                    self.screens[i] = self.sct.monitors[i]
+                    self.screen_names[i] = f"Monitor {i} ({self.sct.monitors[i]['width']}x{self.sct.monitors[i]['height']})"
+            elif total == 1:
+                self.screens[0] = self.sct.monitors[0]
+                self.screens[1] = self.sct.monitors[0]
+                self.screen_names[0] = f"Display 0 ({self.sct.monitors[0]['width']}x{self.sct.monitors[0]['height']})"
+                self.screen_names[1] = f"Primary Display ({self.sct.monitors[0]['width']}x{self.sct.monitors[0]['height']})"
+
+        if self.wayland_cap and self.wayland_cap.active:
+            w_mon = {"left": 0, "top": 0, "width": self.wayland_cap.width, "height": self.wayland_cap.height}
+            self.screens[1] = w_mon
+            self.screen_names[1] = f"Wayland Primary ({w_mon['width']}x{w_mon['height']})"
+            if 0 not in self.screens:
+                self.screens[0] = w_mon
+                self.screen_names[0] = f"All Screens ({w_mon['width']}x{w_mon['height']})"
+
+        base_mon = self.screens.get(1, self.screens.get(0, {"left": 0, "top": 0, "width": 1920, "height": 1080}))
+        bx = base_mon.get("left", 0)
+        by = base_mon.get("top", 0)
+        bw = base_mon.get("width", 1920)
+        bh = base_mon.get("height", 1080)
+        hw = max(1, bw // 2)
+        hh = max(1, bh // 2)
+
+        # Multi-Screen workspaces for indices 2 through 8 to guarantee >5 screens support
+        virtual_defs = {
+            2: (bx, by, hw, hh, "Screen 2: Top-Left"),
+            3: (bx + hw, by, hw, hh, "Screen 3: Top-Right"),
+            4: (bx, by + hh, hw, hh, "Screen 4: Bottom-Left"),
+            5: (bx + hw, by + hh, hw, hh, "Screen 5: Bottom-Right"),
+            6: (bx + hw // 2, by + hh // 2, hw, hh, "Screen 6: Center Focused"),
+            7: (bx, by, hw, bh, "Screen 7: Left Split"),
+            8: (bx + hw, by, hw, bh, "Screen 8: Right Split"),
+        }
+        for idx, (vx, vy, vw, vh, vname) in virtual_defs.items():
+            if idx not in self.screens:
+                self.screens[idx] = {"left": vx, "top": vy, "width": vw, "height": vh}
+                self.screen_names[idx] = vname
+
+        # Screen 9: Android Phone ("Caesar")
+        self.screens[9] = {"left": 0, "top": 0, "width": 1080, "height": 2400, "is_phone": True}
+        self.screen_names[9] = "Caesar Phone (📱 Android)"
+
+        if self.active_screen_id not in self.screens:
+            self.active_screen_id = 1
+        self.monitor = self.screens.get(self.active_screen_id, base_mon)
+
     def _init_screen_capture(self) -> bool:
         is_wayland = bool(os.environ.get("WAYLAND_DISPLAY") or os.environ.get("XDG_SESSION_TYPE") == "wayland")
         if is_wayland:
             try:
                 self.wayland_cap = WaylandScreenCapture(quality=self.quality, scale=self.scale)
                 if self.wayland_cap.active:
-                    self.monitor = {
-                        "left": 0,
-                        "top": 0,
-                        "width": self.wayland_cap.width,
-                        "height": self.wayland_cap.height
-                    }
+                    self._refresh_screens_catalog()
                     console.print(f"[SCREEN] Attached to Wayland screen ({self.wayland_cap.width}x{self.wayland_cap.height}) via Mutter ScreenCast + RemoteDesktop")
+                    console.print(f"[SCREEN] Initialized Multi-Screen support (Screens 1-8 + Caesar Phone)")
                     return True
             except Exception as e:
                 console.print(f"[SCREEN] Wayland stream error: {e}")
@@ -547,12 +608,8 @@ class GhostScreenServer:
             ensure_display_environment()
             mss_factory = getattr(mss, "MSS", mss.mss)
             self.sct = mss_factory()
-            if self.sct.monitors and len(self.sct.monitors) > 1:
-                self.monitor = self.sct.monitors[1]
-            elif self.sct.monitors:
-                self.monitor = self.sct.monitors[0]
-            else:
-                self.monitor = None
+            self._refresh_screens_catalog()
+            console.print(f"[SCREEN] Initialized Multi-Screen support: {len(self.screens)} screens available (Screens 1-8 + Caesar Phone)")
             return self.monitor is not None
         except Exception:
             self.sct = None
@@ -566,6 +623,46 @@ class GhostScreenServer:
 
         event_type = data.get("type")
         if not event_type:
+            return
+
+        # Multi-Screen Selection
+        if event_type == "select_screen":
+            try:
+                target_id = int(data.get("screen_id", 1))
+                self._refresh_screens_catalog()
+                if target_id in self.screens:
+                    self.active_screen_id = target_id
+                    self.monitor = self.screens[target_id]
+                    console.print(f"[SCREEN] Active screen switched to: [bold cyan]{self.screen_names.get(target_id, target_id)}[/bold cyan]")
+            except Exception:
+                pass
+            return
+
+        # Android Phone ("Caesar") Touch & Key Forwarding
+        if self.active_screen_id == 9:
+            try:
+                if not self.phone_controller:
+                    from .phone import PhoneController
+                    self.phone_controller = PhoneController()
+                if event_type == "mouse_down":
+                    rel_x = max(0.0, min(1.0, float(data.get("x", 0.0))))
+                    rel_y = max(0.0, min(1.0, float(data.get("y", 0.0))))
+                    px = int(rel_x * self.monitor.get("width", 1080))
+                    py = int(rel_y * self.monitor.get("height", 2400))
+                    self.phone_controller.tap(px, py)
+                elif event_type in ("key_down", "key_up"):
+                    if event_type == "key_down":
+                        raw_k = data.get("key", "")
+                        if raw_k in ("esc", "Key.esc", "back"):
+                            self.phone_controller.back()
+                        elif raw_k in ("super", "Key.cmd", "home"):
+                            self.phone_controller.home()
+                        elif raw_k in ("tab", "Key.tab", "app_switch"):
+                            self.phone_controller.app_switch()
+                        elif len(raw_k) == 1:
+                            self.phone_controller.type_text(raw_k)
+            except Exception:
+                pass
             return
 
         mon_w = self.monitor.get("width", 1920)
@@ -694,7 +791,23 @@ class GhostScreenServer:
                 if not (self.wayland_cap and self.wayland_cap.active) and not (self.sct and self.monitor):
                     self._init_screen_capture()
 
-                if self.wayland_cap and self.wayland_cap.active:
+                # 1. Android Phone Screen ("Caesar")
+                if self.active_screen_id == 9:
+                    try:
+                        from .phone import capture_phone_frame
+                        p_bytes = capture_phone_frame()
+                        if p_bytes:
+                            ready_clients = [
+                                c for c in self.clients
+                                if getattr(c, "transport", None) is None or c.transport.get_write_buffer_size() < 100_000
+                            ]
+                            if ready_clients:
+                                websockets.broadcast(ready_clients, p_bytes)
+                    except Exception:
+                        pass
+
+                # 2. Wayland screen capture (Primary)
+                elif self.wayland_cap and self.wayland_cap.active and self.active_screen_id == 1:
                     frame_id, frame_bytes = self.wayland_cap.get_latest_frame()
                     now = time.time()
                     if frame_bytes and (frame_id != last_frame_id or (now - last_send_time) >= 1.0):
@@ -711,6 +824,7 @@ class GhostScreenServer:
                         if ready_clients:
                             websockets.broadcast(ready_clients, frame_bytes)
 
+                # 3. MSS multi-screen capture (Screens 0 through 8)
                 elif self.sct and self.monitor:
                     try:
                         sct_img = self.sct.grab(self.monitor)
