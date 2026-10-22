@@ -1,20 +1,23 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # ==============================================================================
-# CPUGhost Universal CLI Launcher
+# CPUGhost Universal CLI Launcher (Compatible with Linux & Termux)
 # ==============================================================================
 set -e
 
 # Dynamically resolve symlinks to find project directory
-SOURCE="${BASH_SOURCE[0]}"
+SOURCE="$0"
 while [ -h "$SOURCE" ]; do
   DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
   SOURCE="$(readlink "$SOURCE")"
-  [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+  [ "${SOURCE%/*}" = "$SOURCE" ] && SOURCE="$DIR/$SOURCE"
 done
 SCRIPT_DIR="$( cd -P "$( dirname "$SOURCE" )" >/dev/null 2>&1 && pwd )"
 PROJECT_DIR="$( cd -P "$SCRIPT_DIR/.." >/dev/null 2>&1 && pwd )"
 
-# Ensure ~/.local/bin is in PATH for uv and other tools
+# Ensure PATH has local bin and termux bin
+if [ -d "/data/data/com.termux/files/usr/bin" ]; then
+    export PATH="/data/data/com.termux/files/usr/bin:${HOME}/bin:${PATH}"
+fi
 export PATH="${HOME}/.local/bin:${PATH}"
 
 # Ensure DISPLAY and XAUTHORITY if available
@@ -23,14 +26,23 @@ if [ -z "$DISPLAY" ] && [ -S "/tmp/.X11-unix/X0" ]; then
 fi
 
 if [ -z "$XAUTHORITY" ]; then
-    UID_NUM="$(id -u)"
-    if compgen -G "/run/user/${UID_NUM}/.mutter-Xwaylandauth*" > /dev/null; then
+    UID_NUM="$(id -u 2>/dev/null || echo 1000)"
+    if ls /run/user/${UID_NUM}/.mutter-Xwaylandauth* >/dev/null 2>&1; then
         export XAUTHORITY="$(ls -1 /run/user/${UID_NUM}/.mutter-Xwaylandauth* 2>/dev/null | head -n 1)"
     elif [ -f "${HOME}/.Xauthority" ]; then
         export XAUTHORITY="${HOME}/.Xauthority"
     fi
 fi
 
+export PYGAME_HIDE_SUPPORT_PROMPT="1"
+export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
+
+# In Termux/Android, use system python3 directly
+if [ -n "$TERMUX_VERSION" ] || [ -d "/data/data/com.termux/files" ]; then
+    exec python3 -m cpughost.cli "$@"
+fi
+
+# On standard Linux (Zorin OS / PC zero), use project venv
 VENV_DIR="${PROJECT_DIR}/.venv"
 VENV_PYTHON="${VENV_DIR}/bin/python"
 
@@ -49,6 +61,4 @@ if [ ! -f "$VENV_PYTHON" ]; then
     echo "[OK] CPUGhost environment successfully initialized."
 fi
 
-export PYGAME_HIDE_SUPPORT_PROMPT="1"
-export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH}"
 exec "$VENV_PYTHON" -m cpughost.cli "$@"

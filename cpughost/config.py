@@ -2,9 +2,10 @@ import os
 import json
 import socket
 import subprocess
+import shutil
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 CONFIG_DIR = Path.home() / ".config" / "cpughost"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -69,11 +70,68 @@ def save_config(cfg: dict):
         json.dump(cfg, f, indent=2)
 
 
+def is_android() -> bool:
+    """Check if executing inside Android or Termux environment."""
+    return bool(
+        os.environ.get("TERMUX_VERSION")
+        or os.environ.get("ANDROID_ROOT")
+        or os.path.exists("/system/build.prop")
+    )
+
+
+def get_default_gateway_ip() -> Optional[str]:
+    """Retrieve the default gateway IPv4 address (host phone IP on hotspot)."""
+    try:
+        with open("/proc/net/route", "r") as f:
+            for line in f.readlines()[1:]:
+                fields = line.strip().split()
+                if len(fields) >= 3 and fields[1] == "00000000":  # Default route
+                    gw_hex = fields[2]
+                    gw_ip = socket.inet_ntoa(bytes.fromhex(gw_hex)[::-1])
+                    if gw_ip != "0.0.0.0":
+                        return gw_ip
+    except Exception:
+        pass
+
+    try:
+        out = subprocess.check_output(
+            ["ip", "route", "show", "default"],
+            text=True,
+            stderr=subprocess.DEVNULL
+        )
+        m = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+
+    return None
+
+
 def get_local_ip() -> str:
     """
     Detect local LAN/hotspot IP address resiliently.
     Works even if hotspot has NO internet data access.
+    Prioritizes Wi-Fi/Hotspot/Ethernet interfaces over VPN/tunnels.
     """
+    # Strategy 0: Direct interface scan (prefers swlan, wlan, ap, eth, en)
+    try:
+        if shutil.which("ifconfig"):
+            out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.DEVNULL)
+            current_iface = None
+            for line in out.splitlines():
+                m_iface = re.match(r"^([a-zA-Z0-9_-]+):", line)
+                if m_iface:
+                    current_iface = m_iface.group(1)
+                elif current_iface and any(current_iface.startswith(p) for p in ["swlan", "wlan", "ap", "eth", "en"]):
+                    m_ip = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+                    if m_ip:
+                        ip = m_ip.group(1)
+                        if not ip.startswith("127."):
+                            return ip
+    except Exception:
+        pass
+
     # Strategy 1: Connect to public DNS via UDP
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -87,27 +145,24 @@ def get_local_ip() -> str:
         pass
 
     # Strategy 2: Determine default gateway from /proc/net/route and connect to it
-    try:
-        with open("/proc/net/route", "r") as f:
-            for line in f.readlines()[1:]:
-                fields = line.strip().split()
-                if len(fields) >= 3 and fields[1] == "00000000":  # Default route
-                    gw_hex = fields[2]
-                    gw_ip = socket.inet_ntoa(bytes.fromhex(gw_hex)[::-1])
-                    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-                    s.settimeout(0.5)
-                    s.connect((gw_ip, 80))
-                    ip = s.getsockname()[0]
-                    s.close()
-                    if ip and not ip.startswith("127."):
-                        return ip
-    except Exception:
-        pass
+    gw_ip = get_default_gateway_ip()
+    if gw_ip:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.connect((gw_ip, 80))
+            ip = s.getsockname()[0]
+            s.close()
+            if ip and not ip.startswith("127."):
+                return ip
+        except Exception:
+            pass
 
     # Strategy 3: Query Linux ip command for global IPv4 address
     try:
+        ip_bin = shutil.which("ip") or "/system/bin/ip"
         out = subprocess.check_output(
-            ["ip", "-4", "-o", "addr", "show", "scope", "global"],
+            [ip_bin, "-4", "-o", "addr", "show", "scope", "global"],
             text=True,
             stderr=subprocess.DEVNULL
         )

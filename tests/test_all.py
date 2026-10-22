@@ -173,6 +173,18 @@ WaylandEnable=false
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["ping"], "pong")
 
+    def test_phone_mirror_helpers(self):
+        from cpughost.phone_mirror import detect_phone_ip, get_connected_adb_devices
+        from cpughost.config import is_android, get_default_gateway_ip
+        self.assertIsInstance(is_android(), bool)
+        devices = get_connected_adb_devices()
+        self.assertIsInstance(devices, list)
+        ip = detect_phone_ip("10.176.124.51")
+        self.assertEqual(ip, "10.176.124.51")
+        # gateway may be None or string
+        gw = get_default_gateway_ip()
+        self.assertTrue(gw is None or isinstance(gw, str))
+
 
 if __name__ == "__main__":
     unittest.main()

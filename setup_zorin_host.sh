@@ -39,7 +39,7 @@ elif command -v sudo >/dev/null 2>&1; then
 fi
 
 MISSING_PACKAGES=()
-for pkg in python3 python3-pip python3-venv git curl xvfb; do
+for pkg in python3 python3-pip python3-venv git curl xvfb scrcpy adb; do
     if command -v dpkg-query >/dev/null 2>&1; then
         if ! dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q "ok installed"; then
             MISSING_PACKAGES+=("$pkg")

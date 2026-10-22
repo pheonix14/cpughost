@@ -16,8 +16,6 @@ from rich.panel import Panel
 from .config import load_config, save_config, get_local_ip, CONFIG_DIR
 from .discovery import GhostDiscovery, scan_hotspot_subnet
 from .drive_client import GhostDriveClient
-from .screen_viewer import GhostScreenViewer
-from .server import run_host
 
 console = Console()
 PID_FILE = CONFIG_DIR / "host.pid"
@@ -332,6 +330,7 @@ def host(daemon: bool):
         console.print("[INFO] Stop host at any time with: ghost stop")
     else:
         print_ascii_banner()
+        from .server import run_host
         run_host()
 
 
@@ -368,6 +367,7 @@ def client(ip: Optional[str] = None, wait: bool = False):
     threading.Thread(target=_sync_drive_bg, daemon=True).start()
 
     console.print(f"[SCREEN] Opening remote screen viewer for {host_ip}...")
+    from .screen_viewer import GhostScreenViewer
     viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
     viewer.start()
 
@@ -396,6 +396,7 @@ def auto(ctx):
         ctx.invoke(client, ip=chosen["ip"])
     else:
         console.print("[AUTO] No existing host found. Starting this PC as discoverable Host...")
+        from .server import run_host
         run_host()
 
 
@@ -409,6 +410,7 @@ def screen(ip: Optional[str] = None):
 
     cfg = load_config()
     console.print(f"[SCREEN] Launching screen viewer window -> {host_ip}")
+    from .screen_viewer import GhostScreenViewer
     viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
     viewer.start()
 
@@ -465,6 +467,49 @@ def pointer_cmd(color: Optional[str] = None, size: Optional[float] = None, list_
         console.print(f"[OK] Set pointer size to: {cfg['pointer_scale']}x")
 
     save_config(cfg)
+
+
+@main.command(name="phone")
+@click.argument("ip", required=False)
+@click.option("--web", "-w", is_flag=True, help="Open Web Screen Stream instead of scrcpy")
+@click.option("--pair", "-p", is_flag=True, help="Pair Android 11+ Wireless Debugging code")
+@click.option("--bitrate", "-b", default="12M", help="Video bitrate (e.g. 8M, 12M, 20M)")
+@click.option("--fps", "-f", default=60, type=int, help="Max framerate (default: 60)")
+@click.option("--off", is_flag=True, help="Turn physical phone screen off while mirroring on PC")
+@click.option("--no-audio", is_flag=True, help="Disable audio forwarding")
+@click.option("--setup", "-s", is_flag=True, help="Interactive Phone Mirror Setup Wizard")
+def phone_cmd(
+    ip: Optional[str] = None,
+    web: bool = False,
+    pair: bool = False,
+    bitrate: str = "12M",
+    fps: int = 60,
+    off: bool = False,
+    no_audio: bool = False,
+    setup: bool = False
+):
+    """Mirror Android phone screen to PC zero with audio & touch/keyboard pass-through."""
+    from .phone_mirror import launch_phone_mirror, interactive_phone_menu, pair_adb_wireless, detect_phone_ip
+
+    if setup:
+        interactive_phone_menu()
+        return
+
+    if pair:
+        phone_ip = ip or detect_phone_ip() or click.prompt("Enter phone IP")
+        port = click.prompt("Enter pairing port from phone Wireless Debugging screen", type=int)
+        code = click.prompt("Enter 6-digit pairing code", type=str)
+        pair_adb_wireless(phone_ip, port, code)
+        return
+
+    launch_phone_mirror(
+        target_ip=ip,
+        bitrate=bitrate,
+        max_fps=fps,
+        turn_screen_off=off,
+        audio=(not no_audio),
+        web_mode=web
+    )
 
 
 @main.group()
@@ -852,6 +897,16 @@ def show_help():
         "ghost nopasswd"
     )
     table.add_row(
+        "ghost phone [ip]",
+        "Mirror Android phone screen with audio & touch",
+        "ghost phone"
+    )
+    table.add_row(
+        "ghost phone --web",
+        "Open web-based phone screen stream in browser",
+        "ghost phone --web"
+    )
+    table.add_row(
         "ghost update [--check]",
         "Check and update to latest GitHub release",
         "ghost update"
@@ -1069,12 +1124,14 @@ def interactive_menu():
         console.print(" [9] Autostart on Boot (Enable / Disable / Status)")
         console.print(" [10] Check for Updates (GitHub: pheonix14/cpughost)")
         console.print(" [11] Configure Passwordless Operation (Never Ask Passwords)")
+        console.print(" [12] Mirror Phone Screen to PC (Android Screen + Audio + Control)")
         console.print(" [H] Command Reference & Help Sheet")
         console.print(" [0] Exit")
         console.print("------------------------------------------------------------------")
 
         choice = click.prompt(" Select option", type=str, default="0")
         if choice == "1":
+            from .server import run_host
             run_host()
         elif choice == "2":
             ctx = click.get_current_context()
@@ -1132,6 +1189,10 @@ def interactive_menu():
         elif choice == "11":
             ctx = click.get_current_context()
             ctx.invoke(configure_nopasswd)
+            click.prompt(" Press Enter to continue", default="", show_default=False)
+        elif choice == "12":
+            from .phone_mirror import interactive_phone_menu
+            interactive_phone_menu()
             click.prompt(" Press Enter to continue", default="", show_default=False)
         elif choice.lower() == "h":
             ctx = click.get_current_context()

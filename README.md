@@ -112,6 +112,54 @@ ghost pointer --size 1.5
 
 ---
 
+## Phone Screen Mirroring (Phone -> PC Zero)
+
+Easily mirror your Android smartphone's screen to PC Zero with low-latency hardware-accelerated video (60 fps), audio forwarding, and full mouse/keyboard pass-through.
+
+### 1. On PC Zero:
+Launch phone mirroring:
+```bash
+ghost phone
+```
+Or with custom options:
+```bash
+# Connect to specific phone IP
+ghost phone 10.176.124.51
+
+# Mirror with phone physical display turned off (save battery)
+ghost phone --off
+
+# Open Web Screen Stream in browser (no ADB needed)
+ghost phone --web
+
+# Interactive phone setup wizard
+ghost phone --setup
+```
+
+### 2. On Your Phone (Termux):
+Run CPUGhost directly on your phone:
+```bash
+# Display phone IP & enable port 5555 for PC Zero
+ghost-phone
+```
+
+### Phone Mirror Controls on PC Zero:
+| Shortcut / Key | Action on Android Phone |
+| :--- | :--- |
+| **Left Click & Drag** | Tap, swipe, and scroll on phone screen |
+| **Right Click** or **Ctrl + B** | Android BACK button |
+| **Middle Click** or **Ctrl + H** | Android HOME button |
+| **Ctrl + S** | App Switcher / Recent Apps |
+| **Ctrl + N** | Expand Notification shade |
+| **Ctrl + P** | Turn phone screen ON / OFF |
+| **Ctrl + F** | Toggle Fullscreen window |
+| **Ctrl + Up / Down** | Volume Up / Down |
+| **Ctrl + C / Ctrl + V** | Synchronize clipboard with phone |
+| **Drag & Drop file** | Push file to phone Download folder / install APK |
+
+
+---
+
 ## Network Discovery & Status
 
 - **Scan hotspot for active CPUGhost nodes**:

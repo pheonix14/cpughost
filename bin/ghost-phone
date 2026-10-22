@@ -1,0 +1,3 @@
+#!/bin/sh
+# CPUGhost Phone Mirror Quick Launcher
+exec ghost phone "$@"
