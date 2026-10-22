@@ -50,11 +50,11 @@ def calculate_letterbox(
     frame_w: int = 1920, frame_h: int = 1080,
     raw_w: Optional[int] = None, raw_h: Optional[int] = None,
     zoom: float = 1.0,
-    force_16_9: bool = True
+    force_16_9: bool = False
 ) -> Tuple[int, int, int, int]:
     """
-    Calculate scaled dimensions and offsets preserving 16:9 landscape aspect ratio.
-    Guarantees proper 16:9 widescreen presentation with zoom support.
+    Calculate scaled dimensions and offsets preserving natural display ratio without distortion.
+    Supports zoom and optional forced 16:9 ratio.
     """
     fw = raw_w if raw_w is not None else frame_w
     fh = raw_h if raw_h is not None else frame_h
@@ -62,7 +62,6 @@ def calculate_letterbox(
         return win_w, win_h, 0, 0
 
     if force_16_9:
-        # Enforce exact 16:9 landscape aspect ratio (1.7777...)
         target_aspect = 16.0 / 9.0
     else:
         target_aspect = fw / fh
@@ -121,7 +120,6 @@ class GhostScreenViewer:
         self.fullscreen = False
         self.running = False
         self.mouse_pressed = False
-        self.force_16_9 = True
 
         self.frame_queue = queue.Queue(maxsize=3)
         self.event_queue = queue.Queue()
@@ -132,14 +130,15 @@ class GhostScreenViewer:
         self.frame_count = 0
         self.connected = False
 
-        # Load configurations: pointer styles and zoom level
+        # Load configurations: pointer styles, normal zoom level, and aspect ratio
         cfg = load_config()
         self.pointer_color_key = cfg.get("pointer_color", "zorin_cyan")
         if self.pointer_color_key not in POINTER_COLORS:
             self.pointer_color_key = "zorin_cyan"
         self.pointer_scale = float(cfg.get("pointer_scale", 1.2))
         self.pointer_click_effect = bool(cfg.get("pointer_click_effect", True))
-        self.zoom = float(cfg.get("screen_zoom", 0.90))
+        self.zoom = float(cfg.get("screen_zoom", 1.0))
+        self.force_16_9 = bool(cfg.get("force_16_9", False))
 
         self.pointer_keys = list(POINTER_COLORS.keys())
         try:
@@ -164,8 +163,8 @@ class GhostScreenViewer:
         save_config(cfg)
         self.show_toast(f"Screen Zoom: {int(self.zoom * 100)}% (F8/F9)")
 
-    def set_zoom(self, val: float):
-        """Set screen zoom level directly."""
+    def set_zoom(self, val: float = 1.0):
+        """Set screen zoom level directly (default 1.0 normal)."""
         self.zoom = round(max(0.40, min(1.80, val)), 2)
         cfg = load_config()
         cfg["screen_zoom"] = self.zoom
@@ -173,9 +172,12 @@ class GhostScreenViewer:
         self.show_toast(f"Screen Zoom Reset: {int(self.zoom * 100)}% (F10)")
 
     def toggle_aspect_ratio(self):
-        """Toggle between forced 16:9 landscape and native aspect ratio."""
+        """Toggle between normal native aspect ratio and forced 16:9 landscape."""
         self.force_16_9 = not self.force_16_9
-        mode_str = "16:9 Landscape" if self.force_16_9 else "Native Stream Ratio"
+        cfg = load_config()
+        cfg["force_16_9"] = self.force_16_9
+        save_config(cfg)
+        mode_str = "16:9 Landscape" if self.force_16_9 else "Normal (Native Ratio)"
         self.show_toast(f"Aspect Ratio: {mode_str} (F5)")
 
     def cycle_pointer_color(self):
@@ -312,7 +314,7 @@ class GhostScreenViewer:
 
     def _run_gui_loop(self):
         pygame.init()
-        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (16:9 Landscape | F8/F9 Zoom | F6 Color | F11 Fullscreen)")
+        pygame.display.set_caption(f"CPUGhost Monitor - [{self.host_ip}] (Normal Ratio | F8/F9 Zoom | F6 Color | F11 Fullscreen)")
         screen = pygame.display.set_mode((self.win_w, self.win_h), pygame.RESIZABLE)
         clock = pygame.time.Clock()
 
@@ -393,9 +395,9 @@ class GhostScreenViewer:
                         )
                         continue
 
-                    # F10: Reset zoom to 90%
+                    # F10: Reset zoom to 100% normal
                     if event.key == pygame.K_F10:
-                        self.set_zoom(0.90)
+                        self.set_zoom(1.0)
                         render_w, render_h, offset_x, offset_y = calculate_letterbox(
                             self.win_w, self.win_h, raw_w, raw_h, zoom=self.zoom, force_16_9=self.force_16_9
                         )
@@ -559,7 +561,7 @@ class GhostScreenViewer:
 
             # HUD overlay
             color_name = POINTER_COLORS[self.pointer_color_key]["name"]
-            aspect_name = "16:9 Landscape" if self.force_16_9 else "Native"
+            aspect_name = "16:9 Landscape" if self.force_16_9 else "Normal Ratio"
             hud_text = f"{self.fps} FPS | {aspect_name} (F5) | Zoom: {int(self.zoom * 100)}% (F8/F9) | Pointer: {color_name} (F6) | F11"
             hud_surface = font.render(hud_text, True, (200, 200, 200))
             hud_bg = pygame.Surface((hud_surface.get_width() + 16, hud_surface.get_height() + 8), pygame.SRCALPHA)

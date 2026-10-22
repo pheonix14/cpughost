@@ -38,6 +38,8 @@ DEFAULT_CONFIG = {
     "auto_mount": True,
     "headless_display": ":0",
     "screen_resolution": "1920x1080",
+    "screen_zoom": 1.0,
+    "force_16_9": False,
     "pointer_color": "zorin_cyan",
     "pointer_scale": 1.2,
     "pointer_click_effect": True
