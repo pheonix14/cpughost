@@ -723,7 +723,7 @@ def screens_cmd():
     table.add_row("6", "Screen 6: Center Focused", "Alt+6", "Senary display / Center workspace")
     table.add_row("7", "Screen 7: Left Split", "Alt+7", "Septenary display / Left ultrawide half")
     table.add_row("8", "Screen 8: Right Split", "Alt+8", "Octonary display / Right ultrawide half")
-    table.add_row("9", "Caesar Phone (📱 Android)", "F3 / Alt+9", "Android smartphone screen mirror & control")
+    table.add_row("9", "Caesar Phone (Android)", "F3 / Alt+9", "Android smartphone screen mirror & control")
 
     console.print(table)
     console.print("\n[INFO] Switch screens inside the viewer using [bold green]F2[/bold green], [bold green]F3[/bold green] (Phone), [bold green]Alt+1..8[/bold green], or by clicking the top tab bar!")

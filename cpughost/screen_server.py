@@ -584,7 +584,7 @@ class GhostScreenServer:
 
         # Screen 9: Android Phone ("Caesar")
         self.screens[9] = {"left": 0, "top": 0, "width": 1080, "height": 2400, "is_phone": True}
-        self.screen_names[9] = "Caesar Phone (📱 Android)"
+        self.screen_names[9] = "Caesar Phone (Android)"
 
         if self.active_screen_id not in self.screens:
             self.active_screen_id = 1

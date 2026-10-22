@@ -172,7 +172,7 @@ class GhostScreenViewer:
             6: "Screen 6",
             7: "Left 7",
             8: "Right 8",
-            9: "Caesar 📱",
+            9: "Caesar Phone",
             0: "All (0)"
         }
 
@@ -272,23 +272,26 @@ class GhostScreenViewer:
         self.toast_msg = msg
         self.toast_until = time.time() + duration
 
-    def _apply_grab_settings(self, grab_kb: bool = True):
+    def _apply_grab_settings(self, grab_kb: bool = False):
         """
-        Grab keyboard strictly for Zorin without ever trapping or locking the mouse cursor.
-        SDL2 Window grab_keyboard=True routes Super (Windows key) and shortcuts to Zorin.
-        SDL2 Window grab_mouse=False and pygame.event.set_grab(False) keep the mouse cursor free.
+        Ensure mouse cursor is NEVER locked or trapped inside the window.
+        Keeps mouse 100% free to move anywhere in and out of the viewer.
         """
         try:
             import pygame._sdl2.video as sdl2_video
             win = sdl2_video.Window.from_display_module()
             if hasattr(win, "grab_keyboard"):
-                win.grab_keyboard = grab_kb
+                win.grab_keyboard = False
             if hasattr(win, "grab_mouse"):
                 win.grab_mouse = False
         except Exception:
             pass
         try:
             pygame.event.set_grab(False)
+        except Exception:
+            pass
+        try:
+            pygame.mouse.set_visible(True)
         except Exception:
             pass
 
@@ -602,10 +605,10 @@ class GhostScreenViewer:
                     mx, my = event.pos
                     inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
                     self.cursor_pos = (mx, my)
-                    self.cursor_visible = inside
+                    self.cursor_visible = False
 
-                    # Hide default OS pointer ONLY when inside the remote screen; show normally outside
-                    pygame.mouse.set_visible(not inside)
+                    # OS pointer always visible, mouse never locked or trapped
+                    pygame.mouse.set_visible(True)
 
                     # Seamless mouse tracking: cursor roams freely, never trapped
                     if inside and render_w > 0 and render_h > 0:
@@ -749,7 +752,7 @@ class GhostScreenViewer:
                 t_bg.blit(t_surf, (12, 6))
                 screen.blit(t_bg, ((self.win_w - t_bg.get_width()) // 2, 70))
 
-            # Render Multi-Screen Selector Tabs Bar at top (Screens 1..8, Caesar Phone 📱, All 0)
+            # Render Multi-Screen Selector Tabs Bar at top (Screens 1..8, Caesar Phone, All 0)
             if self.show_screen_tabs:
                 self.screen_tabs = []
                 tab_h = 24
@@ -764,7 +767,7 @@ class GhostScreenViewer:
                     (6, "6:Scrn6"),
                     (7, "7:Left"),
                     (8, "8:Right"),
-                    (9, "📱Caesar"),
+                    (9, "Caesar"),
                     (0, "0:All")
                 ]
                 for sid, label in tab_defs:
