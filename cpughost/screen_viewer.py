@@ -212,14 +212,18 @@ class GhostScreenViewer:
                             try:
                                 # Dispatch coalesced mouse position if available
                                 if self.pending_mouse_pos:
-                                    mx, my = self.pending_mouse_pos
+                                    pos = self.pending_mouse_pos
                                     self.pending_mouse_pos = None
-                                    await ws.send(json.dumps({"type": "mouse_move", "x": mx, "y": my}))
+                                    await ws.send(json.dumps({"type": "mouse_move", "x": pos[0], "y": pos[1]}))
 
-                                event_data = self.event_queue.get_nowait()
-                                await ws.send(json.dumps(event_data))
+                                # Drain all pending queued events immediately
+                                while not self.event_queue.empty():
+                                    event_data = self.event_queue.get_nowait()
+                                    await ws.send(json.dumps(event_data))
+
+                                await asyncio.sleep(0.003)
                             except queue.Empty:
-                                await asyncio.sleep(0.005)
+                                await asyncio.sleep(0.003)
                             except Exception:
                                 break
 
@@ -301,10 +305,15 @@ class GhostScreenViewer:
                     # Ctrl+G to toggle input grab
                     if event.key == pygame.K_g and (pygame.key.get_mods() & pygame.KMOD_CTRL):
                         self.input_grabbed = not self.input_grabbed
+                        try:
+                            pygame.event.set_grab(self.input_grabbed)
+                        except Exception:
+                            pass
                         status_str = "Grabbed" if self.input_grabbed else "Released"
                         console.print(f"[SCREEN] Input focus: {status_str}")
                         if not self.input_grabbed:
                             pygame.mouse.set_visible(True)
+                        self.show_toast(f"Input Focus: {status_str}")
                         continue
 
                     # Ctrl+Q or ESC when ungrabbed to quit
@@ -340,6 +349,9 @@ class GhostScreenViewer:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
+                        # While mouse is held down (dragging/selecting text), push motion to event queue immediately
+                        if getattr(self, "mouse_pressed", False):
+                            self.event_queue.put({"type": "mouse_move", "x": rx, "y": ry})
 
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = event.pos
@@ -347,17 +359,27 @@ class GhostScreenViewer:
                     self.cursor_pos = (mx, my)
                     self.cursor_visible = inside
 
-                    # Click visual feedback ripple
-                    if self.pointer_click_effect and inside:
-                        c_rgb = POINTER_COLORS[self.pointer_color_key]["rgb"]
-                        self.click_ripples.append({
-                            "x": mx, "y": my, "radius": 4.0, "max_radius": 24.0, "alpha": 220, "color": c_rgb
-                        })
+                    # Auto-grab focus when clicking inside the remote desktop
+                    if inside and not self.input_grabbed:
+                        self.input_grabbed = True
+                        try:
+                            pygame.event.set_grab(True)
+                        except Exception:
+                            pass
+                        self.show_toast("Input Grabbed (Ctrl+G to release)")
 
-                    if self.input_grabbed and render_w > 0 and render_h > 0:
+                    if inside and render_w > 0 and render_h > 0:
                         rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
                         ry = max(0.0, min(1.0, (my - offset_y) / render_h))
                         self.pending_mouse_pos = (rx, ry)
+                        self.mouse_pressed = True
+
+                        # Click visual feedback ripple
+                        if self.pointer_click_effect:
+                            c_rgb = POINTER_COLORS[self.pointer_color_key]["rgb"]
+                            self.click_ripples.append({
+                                "x": mx, "y": my, "radius": 4.0, "max_radius": 24.0, "alpha": 220, "color": c_rgb
+                            })
 
                         btn = "left"
                         if event.button == 3:
@@ -370,10 +392,19 @@ class GhostScreenViewer:
                         elif event.button == 5:
                             self.event_queue.put({"type": "scroll", "dx": 0, "dy": -2})
                             continue
-                        self.event_queue.put({"type": "mouse_down", "button": btn})
+                        self.event_queue.put({"type": "mouse_down", "button": btn, "x": rx, "y": ry})
 
                 elif event.type == pygame.MOUSEBUTTONUP:
-                    if self.input_grabbed:
+                    mx, my = event.pos
+                    inside = (offset_x <= mx < offset_x + render_w and offset_y <= my < offset_y + render_h)
+                    self.cursor_pos = (mx, my)
+                    self.mouse_pressed = False
+
+                    if self.input_grabbed and render_w > 0 and render_h > 0:
+                        rx = max(0.0, min(1.0, (mx - offset_x) / render_w))
+                        ry = max(0.0, min(1.0, (my - offset_y) / render_h))
+                        self.pending_mouse_pos = (rx, ry)
+
                         btn = "left"
                         if event.button == 3:
                             btn = "right"
@@ -381,7 +412,7 @@ class GhostScreenViewer:
                             btn = "middle"
                         elif event.button in (4, 5):
                             continue
-                        self.event_queue.put({"type": "mouse_up", "button": btn})
+                        self.event_queue.put({"type": "mouse_up", "button": btn, "x": rx, "y": ry})
 
             # Check for new video frame
             try:

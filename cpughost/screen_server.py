@@ -219,23 +219,25 @@ class GhostScreenServer:
                 abs_y = int(mon_top + rel_y * mon_h)
                 self.mouse.position = (abs_x, abs_y)
 
-            elif event_type == "mouse_down":
-                btn = MouseButton.left
-                btn_name = data.get("button", "left")
-                if btn_name == "right":
-                    btn = MouseButton.right
-                elif btn_name == "middle":
-                    btn = MouseButton.middle
-                self.mouse.press(btn)
+            elif event_type in ("mouse_down", "mouse_up"):
+                if "x" in data and "y" in data:
+                    rel_x = max(0.0, min(1.0, float(data["x"])))
+                    rel_y = max(0.0, min(1.0, float(data["y"])))
+                    abs_x = int(mon_left + rel_x * mon_w)
+                    abs_y = int(mon_top + rel_y * mon_h)
+                    self.mouse.position = (abs_x, abs_y)
 
-            elif event_type == "mouse_up":
                 btn = MouseButton.left
                 btn_name = data.get("button", "left")
                 if btn_name == "right":
                     btn = MouseButton.right
                 elif btn_name == "middle":
                     btn = MouseButton.middle
-                self.mouse.release(btn)
+
+                if event_type == "mouse_down":
+                    self.mouse.press(btn)
+                else:
+                    self.mouse.release(btn)
 
             elif event_type == "scroll":
                 dx = int(data.get("dx", 0))
