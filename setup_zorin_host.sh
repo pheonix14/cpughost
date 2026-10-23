@@ -6,7 +6,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="${HOME}/.local/bin"
-export PATH="${BIN_DIR}:${HOME}/.cargo/bin:${PATH}"
+export PATH="${BIN_DIR}:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
 
 echo "=================================================================="
 echo "   ____ ____  _   _  ____ _   _  ___  ____ _____ "
@@ -70,37 +70,47 @@ echo ""
 echo "[STEP 2/5] Initializing Python environment..."
 VENV_DIR="${SCRIPT_DIR}/.venv"
 
-# Ensure Python 3 is available; if not, bootstrap portable Python via uv
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "[WARN] Python 3 not found on system. Bootstrapping standalone Python via uv..."
-    if ! command -v uv >/dev/null 2>&1; then
-        echo "[INFO] Downloading uv standalone installer..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+# Check or install standalone uv package manager
+if ! command -v uv >/dev/null 2>&1 && [ ! -x "${HOME}/.local/bin/uv" ]; then
+    echo "[INFO] Downloading standalone uv package manager..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh || true
+    export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
+    if [ "$EUID" -eq 0 ] && [ -x "${HOME}/.local/bin/uv" ]; then
+        cp "${HOME}/.local/bin/uv" /usr/local/bin/uv 2>/dev/null || true
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null && [ -x "${HOME}/.local/bin/uv" ]; then
+        sudo cp "${HOME}/.local/bin/uv" /usr/local/bin/uv 2>/dev/null || true
     fi
-    echo "[INFO] Auto-downloading portable CPython 3.12..."
-    uv python install 3.12
-    uv venv "${VENV_DIR}" --python 3.12
-elif command -v uv >/dev/null 2>&1; then
-    echo "[INFO] Creating virtual environment using uv..."
-    uv venv "${VENV_DIR}" --allow-existing
+fi
+export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:${PATH}"
+
+UV_BIN="$(command -v uv || true)"
+[ -z "$UV_BIN" ] && [ -x "${HOME}/.local/bin/uv" ] && UV_BIN="${HOME}/.local/bin/uv"
+[ -z "$UV_BIN" ] && [ -x "${HOME}/.cargo/bin/uv" ] && UV_BIN="${HOME}/.cargo/bin/uv"
+
+if [ -n "$UV_BIN" ] && [ -x "$UV_BIN" ]; then
+    echo "[INFO] Using uv (${UV_BIN}) to manage environment..."
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "[INFO] Auto-downloading portable CPython 3.12..."
+        "$UV_BIN" python install 3.12
+        "$UV_BIN" venv "${VENV_DIR}" --python 3.12 --seed --allow-existing
+    else
+        "$UV_BIN" venv "${VENV_DIR}" --seed --allow-existing
+    fi
 else
     echo "[INFO] Creating virtual environment using python3 venv..."
     if ! python3 -m venv "${VENV_DIR}" 2>/dev/null; then
-        echo "[INFO] python3-venv module missing. Bootstrapping via uv..."
-        curl -LsSf https://astral.sh/uv/install.sh | sh
-        export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
-        uv venv "${VENV_DIR}"
+        echo "[ERR] Failed to create venv with python3 and uv is missing."
+        exit 1
     fi
 fi
 
 echo "[INFO] Installing CPUGhost dependencies into virtual environment..."
 DEPENDENCIES="fastapi uvicorn websockets mss pillow pynput requests rich click pygame-ce python-multipart httpx"
 
-if command -v uv >/dev/null 2>&1; then
-    uv pip install --python "${VENV_DIR}/bin/python" ${DEPENDENCIES}
+if [ -n "$UV_BIN" ] && [ -x "$UV_BIN" ]; then
+    "$UV_BIN" pip install --python "${VENV_DIR}/bin/python" ${DEPENDENCIES}
 else
-    "${VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel
+    "${VENV_DIR}/bin/pip" install --upgrade pip setuptools wheel 2>/dev/null || true
     "${VENV_DIR}/bin/pip" install ${DEPENDENCIES}
 fi
 
@@ -154,8 +164,9 @@ if [ "$ROLE_CHOICE" = "1" ]; then
     echo "[OK] CPUGhost Host autostart enabled."
 else
     echo "[INFO] Configuring as Primary Client..."
+    "${BIN_DIR}/ghost" autostart enable --client
     "${VENV_DIR}/bin/python" -c "import sys; sys.path.insert(0, '${SCRIPT_DIR}'); from cpughost.config import load_config, save_config; c = load_config(); c['configured_role'] = 'client'; save_config(c)" 2>/dev/null || true
-    echo "[OK] CPUGhost Client mode configured."
+    echo "[OK] CPUGhost Client autostart enabled."
     echo "[INFO] Scanning hotspot for active Host PCs..."
     "${BIN_DIR}/ghost" scan || true
 fi

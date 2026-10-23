@@ -13,12 +13,11 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import load_config, save_config, get_local_ip, CONFIG_DIR
+from .config import load_config, save_config, get_local_ip, CONFIG_DIR, PID_FILE, CLIENT_PID_FILE
 from .discovery import GhostDiscovery, scan_hotspot_subnet
 from .drive_client import GhostDriveClient
 
 console = Console()
-PID_FILE = CONFIG_DIR / "host.pid"
 
 
 def get_stored_pid() -> Optional[int]:
@@ -259,6 +258,7 @@ def first_run_wizard():
         console.print("[INFO] Configuring as Headless Host...")
         ctx.invoke(autostart_enable)
         console.print("[INFO] Starting Host now...")
+        from .server import run_host
         run_host()
     else:
         cfg["configured_role"] = "client"
@@ -329,35 +329,61 @@ def client(ip: Optional[str] = None, wait: bool = False):
     """Connect to ghost host: mount pen drive and launch screen window."""
     check_and_apply_auto_update(silent=True)
 
-    if wait and not ip:
-        notify_desktop("CPUGhost Client Active", "Waiting for Zorin PC on hotspot...")
-        host_ip = wait_for_host_detection()
-    else:
-        host_ip = resolve_host_ip(ip)
-
-    if not host_ip:
-        return
-
-    notify_desktop("CPUGhost Connected", f"Opening monitor window for {host_ip}...")
-    cfg = load_config()
-    mount_dir = Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
-    mount_dir.mkdir(parents=True, exist_ok=True)
-
-    def _sync_drive_bg():
+    CLIENT_PID_FILE = CONFIG_DIR / "client.pid"
+    if CLIENT_PID_FILE.exists():
         try:
-            console.print(f"[DRIVE] Syncing virtual pen drive in background at: {mount_dir}")
-            client_driver = GhostDriveClient(host_ip, port=cfg.get("api_port", 8888))
-            client_driver.sync_once(mount_dir)
-            console.print(f"[OK] Pen drive synchronized: {mount_dir}")
+            old_pid = int(CLIENT_PID_FILE.read_text().strip())
+            os.kill(old_pid, 0)
+            console.print(f"[INFO] CPUGhost Client is already running (PID: {old_pid}). Exiting.")
+            return
+        except (ValueError, OSError):
+            try:
+                CLIENT_PID_FILE.unlink()
+            except Exception:
+                pass
+
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        CLIENT_PID_FILE.write_text(str(os.getpid()))
+    except Exception:
+        pass
+
+    try:
+        if wait and not ip:
+            notify_desktop("CPUGhost Client Active", "Waiting for Zorin PC on hotspot...")
+            host_ip = wait_for_host_detection()
+        else:
+            host_ip = resolve_host_ip(ip)
+
+        if not host_ip:
+            return
+
+        notify_desktop("CPUGhost Connected", f"Opening monitor window for {host_ip}...")
+        cfg = load_config()
+        mount_dir = Path(cfg.get("mount_point", str(Path.home() / "Desktop" / "GhostDrive")))
+        mount_dir.mkdir(parents=True, exist_ok=True)
+
+        def _sync_drive_bg():
+            try:
+                console.print(f"[DRIVE] Syncing virtual pen drive in background at: {mount_dir}")
+                client_driver = GhostDriveClient(host_ip, port=cfg.get("api_port", 8888))
+                client_driver.sync_once(mount_dir)
+                console.print(f"[OK] Pen drive synchronized: {mount_dir}")
+            except Exception:
+                pass
+
+        threading.Thread(target=_sync_drive_bg, daemon=True).start()
+
+        console.print(f"[SCREEN] Opening remote screen viewer for {host_ip}...")
+        from .screen_viewer import GhostScreenViewer
+        viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
+        viewer.start()
+    finally:
+        try:
+            if CLIENT_PID_FILE.exists():
+                CLIENT_PID_FILE.unlink()
         except Exception:
             pass
-
-    threading.Thread(target=_sync_drive_bg, daemon=True).start()
-
-    console.print(f"[SCREEN] Opening remote screen viewer for {host_ip}...")
-    from .screen_viewer import GhostScreenViewer
-    viewer = GhostScreenViewer(host_ip, port=cfg.get("stream_port", 8889))
-    viewer.start()
 
 
 @main.command()
@@ -743,6 +769,7 @@ Exec={ghost_bin} client --wait
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=3
 """
     else:
         desktop_content = f"""[Desktop Entry]
@@ -753,6 +780,7 @@ Exec={ghost_bin} host --daemon
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=2
 """
 
     desktop_file.write_text(desktop_content)
@@ -769,14 +797,15 @@ X-GNOME-Autostart-enabled=true
     service_content = f"""[Unit]
 Description={service_desc}
 After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart={exec_cmd}
-Restart=on-failure
+Restart=always
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
-Environment=DISPLAY=:0
+Environment=PYGAME_HIDE_SUPPORT_PROMPT=1
 
 [Install]
 WantedBy=default.target

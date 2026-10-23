@@ -7,11 +7,9 @@ import asyncio
 import threading
 import subprocess
 from pathlib import Path
-from typing import Set, Optional, Tuple
+from typing import Set, Optional, Tuple, Dict
 import mss
 from PIL import Image
-from pynput.mouse import Controller as MouseController, Button as MouseButton
-from pynput.keyboard import Controller as KeyboardController, Key
 import websockets
 from rich.console import Console
 
@@ -19,69 +17,218 @@ from .config import load_config
 
 console = Console()
 
-KEY_MAPPING = {
-    "super": Key.cmd,
-    "Key.cmd": Key.cmd,
-    "Key.cmd_l": Key.cmd,
-    "Key.cmd_r": Key.cmd_r,
-    "left meta": Key.cmd,
-    "right meta": Key.cmd_r,
-    "left super": Key.cmd,
-    "right super": Key.cmd_r,
-    "meta": Key.cmd,
-    "windows": Key.cmd,
-    "win": Key.cmd,
-    "ctrl": Key.ctrl,
-    "Key.ctrl": Key.ctrl,
-    "left ctrl": Key.ctrl,
-    "right ctrl": Key.ctrl_r,
-    "alt": Key.alt,
-    "Key.alt": Key.alt,
-    "left alt": Key.alt,
-    "right alt": Key.alt_r,
-    "shift": Key.shift,
-    "Key.shift": Key.shift,
-    "left shift": Key.shift,
-    "right shift": Key.shift_r,
-    "return": Key.enter,
-    "enter": Key.enter,
-    "Key.enter": Key.enter,
-    "backspace": Key.backspace,
-    "Key.backspace": Key.backspace,
-    "tab": Key.tab,
-    "Key.tab": Key.tab,
-    "esc": Key.esc,
-    "escape": Key.esc,
-    "Key.esc": Key.esc,
-    "space": Key.space,
-    "Key.space": Key.space,
-    "delete": Key.delete,
-    "Key.delete": Key.delete,
-    "insert": Key.insert,
-    "Key.insert": Key.insert,
-    "up": Key.up,
-    "Key.up": Key.up,
-    "down": Key.down,
-    "Key.down": Key.down,
-    "left": Key.left,
-    "Key.left": Key.left,
-    "right": Key.right,
-    "Key.right": Key.right,
-    "home": Key.home,
-    "Key.home": Key.home,
-    "end": Key.end,
-    "Key.end": Key.end,
-    "page up": Key.page_up,
-    "page down": Key.page_down,
-    "caps lock": Key.caps_lock,
-    "caps_lock": Key.caps_lock,
-    "num lock": Key.num_lock,
-    "scroll lock": Key.scroll_lock,
-}
-for f in range(1, 13):
-    if hasattr(Key, f"f{f}"):
-        KEY_MAPPING[f"f{f}"] = getattr(Key, f"f{f}")
+
+def ensure_xauthority():
+    """Ensure XAUTHORITY is set to an active authority file for X11/Xwayland."""
+    if os.environ.get("XAUTHORITY") and os.path.exists(os.environ["XAUTHORITY"]):
+        return
+
+    uid = os.getuid()
+    run_dir = Path(f"/run/user/{uid}")
+    candidates = []
+    if run_dir.exists():
+        candidates.extend(sorted(run_dir.glob(".mutter-Xwaylandauth.*"), key=lambda p: p.stat().st_mtime, reverse=True))
+        candidates.extend(sorted(run_dir.glob("*xauth*"), key=lambda p: p.stat().st_mtime, reverse=True))
+        candidates.extend(sorted(run_dir.glob(".Xauthority*"), key=lambda p: p.stat().st_mtime, reverse=True))
+    candidates.append(Path.home() / ".Xauthority")
+    candidates.append(Path("/tmp/.X11-unix/Xauthority"))
+
+    for c in candidates:
+        if c.exists() and c.is_file():
+            os.environ["XAUTHORITY"] = str(c)
+            return
+
+
+def ensure_display_environment(resolution: str = "1920x1080"):
+    """Ensure a valid X11 or Wayland display environment variable exists."""
+    ensure_xauthority()
+
+    current_disp = os.environ.get("DISPLAY")
+    # If current DISPLAY is not backed by an active socket, check available sockets
+    if not current_disp or (current_disp.startswith(":") and not os.path.exists(f"/tmp/.X11-unix/X{current_disp[1:]}")):
+        for num in range(5):
+            sock = f"/tmp/.X11-unix/X{num}"
+            if os.path.exists(sock):
+                os.environ["DISPLAY"] = f":{num}"
+                return
+
+        xvfb_bin = shutil.which("Xvfb")
+        if xvfb_bin:
+            try:
+                res_spec = f"{resolution}x24"
+                subprocess.Popen(
+                    [xvfb_bin, ":99", "-screen", "0", res_spec, "-nocursor"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    preexec_fn=os.setpgrp
+                )
+                time.sleep(0.5)
+                os.environ["DISPLAY"] = ":99"
+                console.print(f"[SCREEN] Spawned virtual monitor on display :99 ({resolution} Xvfb)")
+                return
+            except Exception:
+                pass
+
+        if not os.environ.get("DISPLAY"):
+            os.environ["DISPLAY"] = ":0"
+
+
+# Fallback Key structure to prevent import crash on headless boot
+class _FallbackKey:
+    def __init__(self, name: str):
+        self.name = name
+
+    def __repr__(self) -> str:
+        return f"Key.{self.name}"
+
+    def __str__(self) -> str:
+        return f"Key.{self.name}"
+
+    def __eq__(self, other) -> bool:
+        if hasattr(other, "name"):
+            return self.name == other.name
+        return str(self) == str(other)
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
+class _DummyKeyEnum:
+    cmd = _FallbackKey("cmd")
+    cmd_l = _FallbackKey("cmd_l")
+    cmd_r = _FallbackKey("cmd_r")
+    ctrl = _FallbackKey("ctrl")
+    ctrl_r = _FallbackKey("ctrl_r")
+    alt = _FallbackKey("alt")
+    alt_r = _FallbackKey("alt_r")
+    shift = _FallbackKey("shift")
+    shift_r = _FallbackKey("shift_r")
+    enter = _FallbackKey("enter")
+    backspace = _FallbackKey("backspace")
+    tab = _FallbackKey("tab")
+    esc = _FallbackKey("esc")
+    space = _FallbackKey("space")
+    delete = _FallbackKey("delete")
+    insert = _FallbackKey("insert")
+    up = _FallbackKey("up")
+    down = _FallbackKey("down")
+    left = _FallbackKey("left")
+    right = _FallbackKey("right")
+    home = _FallbackKey("home")
+    end = _FallbackKey("end")
+    page_up = _FallbackKey("page_up")
+    page_down = _FallbackKey("page_down")
+    caps_lock = _FallbackKey("caps_lock")
+    num_lock = _FallbackKey("num_lock")
+    scroll_lock = _FallbackKey("scroll_lock")
+
+
+class _DummyMouseButton:
+    left = "left"
+    right = "right"
+    middle = "middle"
+
+
+MouseController = None
+MouseButton = _DummyMouseButton()
+KeyboardController = None
+Key = _DummyKeyEnum()
+
+
+def _build_key_mapping(key_cls) -> dict:
+    km = {
+        "super": key_cls.cmd,
+        "Key.cmd": key_cls.cmd,
+        "Key.cmd_l": key_cls.cmd,
+        "Key.cmd_r": key_cls.cmd_r,
+        "left meta": key_cls.cmd,
+        "right meta": key_cls.cmd_r,
+        "left super": key_cls.cmd,
+        "right super": key_cls.cmd_r,
+        "meta": key_cls.cmd,
+        "windows": key_cls.cmd,
+        "win": key_cls.cmd,
+        "ctrl": key_cls.ctrl,
+        "Key.ctrl": key_cls.ctrl,
+        "left ctrl": key_cls.ctrl,
+        "right ctrl": key_cls.ctrl_r,
+        "alt": key_cls.alt,
+        "Key.alt": key_cls.alt,
+        "left alt": key_cls.alt,
+        "right alt": key_cls.alt_r,
+        "shift": key_cls.shift,
+        "Key.shift": key_cls.shift,
+        "left shift": key_cls.shift,
+        "right shift": key_cls.shift_r,
+        "return": key_cls.enter,
+        "enter": key_cls.enter,
+        "Key.enter": key_cls.enter,
+        "backspace": key_cls.backspace,
+        "Key.backspace": key_cls.backspace,
+        "tab": key_cls.tab,
+        "Key.tab": key_cls.tab,
+        "esc": key_cls.esc,
+        "escape": key_cls.esc,
+        "Key.esc": key_cls.esc,
+        "space": key_cls.space,
+        "Key.space": key_cls.space,
+        "delete": key_cls.delete,
+        "Key.delete": key_cls.delete,
+        "insert": key_cls.insert,
+        "Key.insert": key_cls.insert,
+        "up": key_cls.up,
+        "Key.up": key_cls.up,
+        "down": key_cls.down,
+        "Key.down": key_cls.down,
+        "left": key_cls.left,
+        "Key.left": key_cls.left,
+        "right": key_cls.right,
+        "Key.right": key_cls.right,
+        "home": key_cls.home,
+        "Key.home": key_cls.home,
+        "end": key_cls.end,
+        "Key.end": key_cls.end,
+        "page up": key_cls.page_up,
+        "page down": key_cls.page_down,
+        "caps lock": key_cls.caps_lock,
+        "caps_lock": key_cls.caps_lock,
+        "num lock": key_cls.num_lock,
+        "scroll lock": key_cls.scroll_lock,
+    }
+    for f in range(1, 13):
+        if hasattr(key_cls, f"f{f}"):
+            km[f"f{f}"] = getattr(key_cls, f"f{f}")
+    return km
+
+
+KEY_MAPPING = _build_key_mapping(Key)
 KEY_MAP = KEY_MAPPING
+
+
+def _try_load_pynput() -> bool:
+    global MouseController, MouseButton, KeyboardController, Key, KEY_MAPPING, KEY_MAP
+    if MouseController is not None and KeyboardController is not None and not isinstance(Key, _DummyKeyEnum):
+        return True
+    try:
+        ensure_display_environment()
+        from pynput.mouse import Controller as MC, Button as MB
+        from pynput.keyboard import Controller as KC, Key as K
+        MouseController = MC
+        MouseButton = MB
+        KeyboardController = KC
+        Key = K
+        KEY_MAPPING.update(_build_key_mapping(K))
+        KEY_MAP = KEY_MAPPING
+        return True
+    except Exception:
+        return False
+
+
+# Attempt early load if display is present
+try:
+    _try_load_pynput()
+except Exception:
+    pass
 
 KEYSYM_MAP = {
     "super": 0xffeb,
@@ -140,61 +287,6 @@ KEYSYM_MAP = {
 }
 for f in range(1, 13):
     KEYSYM_MAP[f"f{f}"] = 0xffbe + f - 1
-
-
-def ensure_xauthority():
-    """Ensure XAUTHORITY is set to an active authority file for X11/Xwayland."""
-    if os.environ.get("XAUTHORITY") and os.path.exists(os.environ["XAUTHORITY"]):
-        return
-
-    uid = os.getuid()
-    run_dir = Path(f"/run/user/{uid}")
-    candidates = []
-    if run_dir.exists():
-        candidates.extend(sorted(run_dir.glob(".mutter-Xwaylandauth.*"), key=lambda p: p.stat().st_mtime, reverse=True))
-        candidates.extend(sorted(run_dir.glob("*xauth*"), key=lambda p: p.stat().st_mtime, reverse=True))
-        candidates.extend(sorted(run_dir.glob(".Xauthority*"), key=lambda p: p.stat().st_mtime, reverse=True))
-    candidates.append(Path.home() / ".Xauthority")
-    candidates.append(Path("/tmp/.X11-unix/Xauthority"))
-
-    for c in candidates:
-        if c.exists() and c.is_file():
-            os.environ["XAUTHORITY"] = str(c)
-            return
-
-
-def ensure_display_environment(resolution: str = "1920x1080"):
-    """Ensure a valid X11 or Wayland display environment variable exists."""
-    ensure_xauthority()
-
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        for num in range(5):
-            sock = f"/tmp/.X11-unix/X{num}"
-            if os.path.exists(sock):
-                os.environ["DISPLAY"] = f":{num}"
-                console.print(f"[SCREEN] Attached to detected display: :{num}")
-                return
-
-        xvfb_bin = shutil.which("Xvfb")
-        if xvfb_bin:
-            try:
-                res_spec = f"{resolution}x24"
-                subprocess.Popen(
-                    [xvfb_bin, ":99", "-screen", "0", res_spec, "-nocursor"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    preexec_fn=os.setpgrp
-                )
-                time.sleep(0.5)
-                os.environ["DISPLAY"] = ":99"
-                console.print(f"[SCREEN] Spawned virtual monitor on display :99 ({resolution} Xvfb)")
-                return
-            except Exception:
-                pass
-
-        os.environ["DISPLAY"] = ":0"
-    elif not os.environ.get("DISPLAY"):
-        os.environ["DISPLAY"] = ":0"
 
 
 class WaylandScreenCapture:
@@ -523,8 +615,12 @@ class GhostScreenServer:
 
     def _init_input_controllers(self):
         try:
-            self.mouse = MouseController()
-            self.keyboard = KeyboardController()
+            if _try_load_pynput() and MouseController and KeyboardController:
+                self.mouse = MouseController()
+                self.keyboard = KeyboardController()
+            else:
+                self.mouse = None
+                self.keyboard = None
         except Exception:
             self.mouse = None
             self.keyboard = None
@@ -617,9 +713,12 @@ class GhostScreenServer:
             return False
 
     def handle_input_event(self, data: dict):
-        if not self.monitor:
+        if not self.monitor and not (self.wayland_cap and self.wayland_cap.active):
             if not self._init_screen_capture():
                 return
+
+        if self.mouse is None or self.keyboard is None:
+            self._init_input_controllers()
 
         event_type = data.get("type")
         if not event_type:
@@ -847,6 +946,14 @@ class GhostScreenServer:
                     except Exception:
                         self.sct = None
                         self.monitor = None
+
+                # Headless retry: if screen not detected yet, periodically re-check
+                elif not self.monitor and not (self.wayland_cap and self.wayland_cap.active):
+                    now = time.time()
+                    if now - getattr(self, "_last_capture_retry", 0) >= 3.0:
+                        self._last_capture_retry = now
+                        self._init_screen_capture()
+                        self._init_input_controllers()
 
             elapsed = time.time() - start_time
             sleep_time = max(0.001, interval - elapsed)

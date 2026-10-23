@@ -59,10 +59,10 @@ ghost client 10.176.124.73
 CPUGhost now supports **more than 5 simultaneous screens** (Screens 1 through 8 + Caesar Phone + Panoramic View):
 
 - **Switch Screens**: Press <kbd>F2</kbd> to cycle next screen, or press <kbd>Alt</kbd>+<kbd>1</kbd> .. <kbd>Alt</kbd>+<kbd>8</kbd> to jump directly to any screen.
-- **Top Screen Tabs Bar**: Click any screen tab at the top of the viewer (`[1:Main]`, `[2:Scrn2]`, `[3:Scrn3]`, `[4:Scrn4]`, `[5:Scrn5]`, `[6:Scrn6]`, `[7:Left]`, `[8:Right]`, `[📱Caesar]`, `[0:All]`).
+- **Top Screen Tabs Bar**: Click any screen tab at the top of the viewer (`[1:Main]`, `[2:Scrn2]`, `[3:Scrn3]`, `[4:Scrn4]`, `[5:Scrn5]`, `[6:Scrn6]`, `[7:Left]`, `[8:Right]`, `[Caesar]`, `[0:All]`).
 - **Toggle Screen Bar**: Press <kbd>F1</kbd> to show or hide the multi-screen tabs bar.
 - **Phone Mirror & Control (Caesar)**:
-  - Inside viewer: Press <kbd>F3</kbd> or click `[📱Caesar]` to view and control your phone!
+  - Inside viewer: Press <kbd>F3</kbd> or click `[Caesar]` to view and control your phone!
   - High-performance popout window: Press <kbd>Shift</kbd> + <kbd>F3</kbd> or run:
     ```bash
     ghost phone              # Auto-detects Caesar via USB or Hotspot Wi-Fi

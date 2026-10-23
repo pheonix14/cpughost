@@ -249,6 +249,24 @@ WaylandEnable=false
         self.assertTrue(hasattr(mirror, "_ensure_free_mouse"))
         mirror.shell.close()
 
+    def test_version_consistency(self):
+        from cpughost import __version__
+        self.assertEqual(__version__, "7.6.0")
+        from cpughost.update import get_current_version
+        self.assertEqual(get_current_version(), "7.6.0")
+
+    def test_headless_import_safety(self):
+        # Verify that screen_server and cli can be imported without X11 display
+        orig_disp = os.environ.get("DISPLAY")
+        try:
+            os.environ["DISPLAY"] = ""
+            import cpughost.screen_server as ss
+            self.assertIsNotNone(ss.KEY_MAPPING)
+            self.assertIn("super", ss.KEY_MAPPING)
+        finally:
+            if orig_disp:
+                os.environ["DISPLAY"] = orig_disp
+
 
 if __name__ == "__main__":
     unittest.main()

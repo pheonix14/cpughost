@@ -22,7 +22,7 @@ def get_current_version() -> str:
         from . import __version__
         return __version__
     except Exception:
-        return "7.4.0"
+        return "7.6.0"
 
 
 def get_latest_remote_info(project_dir: Path) -> Tuple[Optional[str], Optional[str]]:
@@ -79,6 +79,8 @@ def sync_desktop_packages(project_dir: Path):
     v2_dir = desktop_dir / "v2"
     v3_dir = desktop_dir / "v3"
     drive_zip = desktop_dir / "GhostDrive" / "ghost-v7.zip"
+    ghost_v3_zip = desktop_dir / "ghost-v3.zip"
+    ghost_v7_zip = desktop_dir / "ghost-v7.zip"
 
     try:
         if v2_dir.exists():
@@ -92,10 +94,21 @@ def sync_desktop_packages(project_dir: Path):
                 capture_output=True, timeout=10.0
             )
         if drive_zip.parent.exists():
+            drive_zip.unlink(missing_ok=True)
             subprocess.run(
                 ["zip", "-q", "-r", str(drive_zip), "cpughost", "-x", "cpughost/.git/*", "-x", "cpughost/.venv/*", "-x", "*/__pycache__/*"],
                 cwd=str(desktop_dir), capture_output=True, timeout=10.0
             )
+        ghost_v3_zip.unlink(missing_ok=True)
+        subprocess.run(
+            ["zip", "-q", "-r", str(ghost_v3_zip), "cpughost", "-x", "cpughost/.git/*", "-x", "cpughost/.venv/*", "-x", "*/__pycache__/*"],
+            cwd=str(desktop_dir), capture_output=True, timeout=10.0
+        )
+        ghost_v7_zip.unlink(missing_ok=True)
+        subprocess.run(
+            ["zip", "-q", "-r", str(ghost_v7_zip), "cpughost", "-x", "cpughost/.git/*", "-x", "cpughost/.venv/*", "-x", "*/__pycache__/*"],
+            cwd=str(desktop_dir), capture_output=True, timeout=10.0
+        )
     except Exception:
         pass
 

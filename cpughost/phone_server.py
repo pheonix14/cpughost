@@ -28,6 +28,8 @@ import websockets
 from PIL import Image, ImageDraw
 from rich.console import Console
 
+from . import __version__
+
 from .config import load_config, get_local_ip, get_broadcast_ip, get_arp_neighbors
 
 console = Console()
@@ -196,7 +198,7 @@ class PhoneDriveHandler(BaseHTTPRequestHandler):
                 "stream_port": 8889,
                 "audio_port": 8890,
                 "discovery_port": 8989,
-                "version": "7.4.0",
+                "version": __version__,
                 "storage_dir": str(STORAGE_DIR)
             })
             return

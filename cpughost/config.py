@@ -9,6 +9,8 @@ from typing import List, Optional
 
 CONFIG_DIR = Path.home() / ".config" / "cpughost"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+PID_FILE = CONFIG_DIR / "host.pid"
+CLIENT_PID_FILE = CONFIG_DIR / "client.pid"
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_STORAGE = PROJECT_DIR / "storage" if (PROJECT_DIR / "storage").exists() else Path.home() / "GhostStorage"
 

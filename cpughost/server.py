@@ -9,7 +9,8 @@ from fastapi.responses import FileResponse
 import uvicorn
 from rich.console import Console
 
-from .config import load_config, get_local_ip, wait_for_hotspot_ip, DEFAULT_STORAGE
+from . import __version__
+from .config import load_config, get_local_ip, wait_for_hotspot_ip, DEFAULT_STORAGE, PID_FILE
 from .discovery import GhostDiscovery
 from .drive_server import create_drive_routes
 from .screen_server import GhostScreenServer
@@ -36,7 +37,7 @@ def create_app(cfg: dict) -> FastAPI:
             "stream_port": cfg.get("stream_port", 8889),
             "audio_port": cfg.get("audio_port", 8890),
             "discovery_port": cfg.get("discovery_port", 8989),
-            "version": "6.0.0"
+            "version": __version__
         }
 
     @app.get("/api/ping")
@@ -84,7 +85,20 @@ class GhostHostServer:
         self.running = False
 
     def start(self):
+        # Prevent double-binding if host is already running locally
+        try:
+            import urllib.request
+            req = urllib.request.Request(f"http://127.0.0.1:{self.api_port}/api/ping", method="GET")
+            with urllib.request.urlopen(req, timeout=1.0) as resp:
+                if resp.status == 200:
+                    console.print(f"[WARN] CPUGhost Host is already running on port {self.api_port}.")
+                    return
+        except Exception:
+            pass
+
         self.running = True
+        PID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        PID_FILE.write_text(str(os.getpid()))
 
         # Ensure network IP is ready (critical for headless boot)
         if self.local_ip == "127.0.0.1":
@@ -136,6 +150,11 @@ class GhostHostServer:
         self.discovery.stop()
         self.screen_server.stop()
         self.audio_server.stop()
+        try:
+            if PID_FILE.exists():
+                PID_FILE.unlink()
+        except Exception:
+            pass
         console.print("[HOST] CPUGhost Host stopped.")
 
 
