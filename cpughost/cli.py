@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import load_config, save_config, get_local_ip, CONFIG_DIR, PID_FILE, CLIENT_PID_FILE
+from .config import load_config, save_config, get_local_ip, CONFIG_DIR, PID_FILE, CLIENT_PID_FILE, is_android
 from .discovery import GhostDiscovery, scan_hotspot_subnet
 from .drive_client import GhostDriveClient
 

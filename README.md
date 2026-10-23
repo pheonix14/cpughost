@@ -2,6 +2,8 @@
 
 Headless Dual-PC Hotspot Screen & Virtual Pen Drive System.
 
+> **Free scrcpy alternative for PCs & mobile.** Connects multiple PCs together forming a huge chain like a web locally over hotspot or LAN, with headless multi-screen tabs, 60fps Caesar phone mirroring, and virtual pen drive file synchronization.
+
 ```
 ==================================================================
    ____ ____  _   _  ____ _   _  ___  ____ _____ 
